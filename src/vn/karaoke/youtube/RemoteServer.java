@@ -70,14 +70,15 @@ public class RemoteServer {
                     try { server = new ServerSocket(p); boundPort = p; break; }
                     catch (Exception e) { server = null; }
                 }
-                if (server == null) { running = false; return; }
+                if (server == null) { running = false; StartupLog.log(ctx, "RemoteServer bind THAT BAI 8792-8795"); return; }
+                StartupLog.log(ctx, "RemoteServer bind OK port=" + boundPort);
                 while (running) {
                     final Socket s = server.accept();
                     pool.execute(new Runnable() {
                         @Override public void run() { handle(s); }
                     });
                 }
-            } catch (Exception e) { running = false; }
+            } catch (Exception e) { running = false; StartupLog.log(ctx, "RemoteServer thread chet: " + e); }
             }
         }, "remote-server").start();
     }

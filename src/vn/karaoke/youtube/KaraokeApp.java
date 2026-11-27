@@ -8,5 +8,6 @@ public class KaraokeApp extends Application {
     public void onCreate() {
         super.onCreate();
         CrashHandler.install(this);
+        StartupLog.log(this, "App start (KaraokeApp.onCreate)");
     }
 }

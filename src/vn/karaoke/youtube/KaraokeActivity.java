@@ -75,7 +75,9 @@ public class KaraokeActivity extends Activity {
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        try { startPlayerService(); } catch (Exception e) { CrashHandler.log(this, e); }
+        StartupLog.log(this, "Activity onCreate");
+        try { startPlayerService(); StartupLog.log(this, "startPlayerService() goi xong"); }
+        catch (Exception e) { StartupLog.log(this, "startPlayerService LOI: " + e); CrashHandler.log(this, e); }
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF09090D);
@@ -95,7 +97,9 @@ public class KaraokeActivity extends Activity {
         // Show a readable error instead of crashing.
         try {
             webView = new WebView(this);
+            StartupLog.log(this, "WebView tao xong");
         } catch (Throwable t) {
+            StartupLog.log(this, "WebView LOI: " + t);
             CrashHandler.log(this, t);
             TextView err = new TextView(this);
             err.setTextSize(20);
@@ -117,10 +121,12 @@ public class KaraokeActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 21) ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         webView.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
+                StartupLog.log(KaraokeActivity.this, "onPageFinished: " + url);
                 hideStageStatus();
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request != null && request.isForMainFrame()) {
+                    StartupLog.log(KaraokeActivity.this, "onReceivedError: " + request.getUrl() + " / " + error.getDescription());
                     showStageStatus("KHONG TAI DUOC GIAO DIEN\n" + request.getUrl()
                             + "\nLoi: " + error.getDescription()
                             + "\n\nNhan OK tren remote de thu lai.", true);
@@ -128,6 +134,7 @@ public class KaraokeActivity extends Activity {
             }
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
                 if (request != null && request.isForMainFrame()) {
+                    StartupLog.log(KaraokeActivity.this, "onReceivedHttpError: " + request.getUrl() + " HTTP " + errorResponse.getStatusCode());
                     showStageStatus("KHONG TAI DUOC GIAO DIEN\n" + request.getUrl()
                             + "\nHTTP " + errorResponse.getStatusCode()
                             + "\n\nNhan OK tren remote de thu lai.", true);
@@ -139,12 +146,13 @@ public class KaraokeActivity extends Activity {
         webView.addJavascriptInterface(new Bridge(), "KB");
         root.addView(webView);
         stageStatus = new TextView(this);
-        stageStatus.setTextSize(22);
+        stageStatus.setTextSize(18);
         stageStatus.setTextColor(0xFFFFFFFF);
-        stageStatus.setGravity(android.view.Gravity.CENTER);
         stageStatus.setPadding(60, 60, 60, 60);
         stageStatus.setText("Đang khởi động server Karaoke…");
-        root.addView(stageStatus, new FrameLayout.LayoutParams(
+        android.widget.ScrollView stageScroll = new android.widget.ScrollView(this);
+        stageScroll.addView(stageStatus);
+        root.addView(stageScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
 
@@ -304,20 +312,23 @@ public class KaraokeActivity extends Activity {
     private void loadStageWhenReady() {
         stageErrorShown = false;
         stageLoadAttempts = 0;
-        if (stageStatus != null) {
-            stageStatus.setVisibility(View.VISIBLE);
-            stageStatus.setText("Đang khởi động server Karaoke…");
-        }
+        showStageStatus("Đang khởi động server Karaoke…", false);
+        StartupLog.log(this, "loadStageWhenReady: doi server...");
         stageHandler.post(new Runnable() {
             @Override public void run() {
                 PlayerService s = PlayerService.getInstance();
                 RemoteServer srv = s == null ? null : s.getServer();
                 if (srv != null && srv.isRunning()) {
+                    StartupLog.log(KaraokeActivity.this, "server running, port=" + srv.getPort() + " -> loadUrl " + srv.stageUrl());
                     if (webView != null) webView.loadUrl(srv.stageUrl());
                     return;
                 }
                 stageLoadAttempts++;
+                if (stageLoadAttempts % 3 == 0) {
+                    showStageStatus("Đang khởi động server Karaoke… (" + (stageLoadAttempts * 300 / 1000) + "s)", false);
+                }
                 if (stageLoadAttempts >= 27) { // ~8 s
+                    StartupLog.log(KaraokeActivity.this, "server KHONG chay sau 8s (service=" + (s != null) + ")");
                     showStageStatus("KHONG TAI DUOC GIAO DIEN\nServer 8792 chua chay sau 8 giay."
                             + "\n\nNhan OK tren remote de thu lai.", true);
                     return;
@@ -331,7 +342,9 @@ public class KaraokeActivity extends Activity {
         stageErrorShown = isError;
         if (stageStatus != null) {
             stageStatus.setVisibility(View.VISIBLE);
-            stageStatus.setText(text);
+            // Always show the startup log under the message: if the app dies,
+            // one photo of this screen tells exactly which step it died on.
+            stageStatus.setText(text + "\n\n--- LOG KHOI DONG ---\n" + StartupLog.getText());
         }
     }
 

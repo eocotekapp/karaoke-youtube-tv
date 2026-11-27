@@ -58,11 +58,13 @@ public class CrashHandler implements Thread.UncaughtExceptionHandler {
             if (dir == null) dir = ctx.getFilesDir();
             File f = new File(dir, "crash-" + stamp() + ".txt");
             FileOutputStream os = new FileOutputStream(f);
-            String head = "Karaoke YouTube v1.0.1 crash\n"
+            String head = "Karaoke YouTube v1.0.4 crash\n"
                     + "Time: " + new Date().toString() + "\n"
                     + "Device: " + Build.MANUFACTURER + " " + Build.MODEL
                     + " Android " + Build.VERSION.RELEASE + " SDK " + Build.VERSION.SDK_INT
-                    + " ABI " + Build.CPU_ABI + "\n\n";
+                    + " ABI " + Build.CPU_ABI + "\n\n"
+                    + "--- STARTUP LOG ---\n" + StartupLog.getText() + "\n"
+                    + "--- STACK TRACE ---\n";
             os.write((head + trace).getBytes("UTF-8"));
             os.close();
             return f;

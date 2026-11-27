@@ -66,6 +66,7 @@ public class PlayerService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         instance = this;
+        StartupLog.log(this, "PlayerService onCreate");
         library = new LibraryState(this);
         player = new MesuPlayer(this);
         server = new RemoteServer(this, library, player);
@@ -76,7 +77,9 @@ public class PlayerService extends Service {
         });
         server.setTunnel(tunnel);
         server.start();
+        StartupLog.log(this, "RemoteServer.start() goi xong, running=" + server.isRunning());
         tunnel.start();
+        StartupLog.log(this, "PinggyTunnel.start() goi xong");
         // Anti-Doze / anti-kill: hold locks for as long as the server + tunnel run.
         // Foreground service (START_STICKY + ongoing notification, mediaPlayback)
         // is what exempts the app from Doze; the locks keep CPU + Wi-Fi alive
@@ -98,7 +101,9 @@ public class PlayerService extends Service {
         } catch (Exception e) { CrashHandler.log(this, e); }
         try {
             startForeground(NOTIF_ID, buildNotification("Karaoke YouTube đang chạy"));
+            StartupLog.log(this, "startForeground OK");
         } catch (Exception e) {
+            StartupLog.log(this, "startForeground LOI: " + e);
             CrashHandler.log(this, e);
             throw new RuntimeException(e);
         }
