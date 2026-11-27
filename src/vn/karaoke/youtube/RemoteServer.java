@@ -42,6 +42,10 @@ public class RemoteServer {
     private ServerSocket server;
     private ExecutorService pool;
     private volatile boolean running = false;
+    private volatile int boundPort = -1;
+    /** Port the server actually bound to (8792, or 8793-8795 if 8792 was busy). */
+    public int getPort() { return boundPort > 0 ? boundPort : PORT; }
+    public String stageUrl() { return "http://127.0.0.1:" + getPort() + "/stage"; }
 
     public RemoteServer(Context ctx, LibraryState library, MesuPlayer player) {
         this.ctx = ctx.getApplicationContext();
@@ -59,7 +63,14 @@ public class RemoteServer {
         new Thread(new Runnable() {
             @Override public void run() {
             try {
-                server = new ServerSocket(PORT);
+                // Port 8792 may already be held (old service instance, Gathin
+                // tvhome on the same box). Try 8792-8795 and remember the one
+                // that bound, so the stage loads from the right port.
+                for (int p = PORT; p < PORT + 4; p++) {
+                    try { server = new ServerSocket(p); boundPort = p; break; }
+                    catch (Exception e) { server = null; }
+                }
+                if (server == null) { running = false; return; }
                 while (running) {
                     final Socket s = server.accept();
                     pool.execute(new Runnable() {

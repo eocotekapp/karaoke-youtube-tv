@@ -16,6 +16,8 @@ import android.view.SurfaceView;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.JavascriptInterface;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -113,14 +115,40 @@ public class KaraokeActivity extends Activity {
         ws.setDomStorageEnabled(true);
         ws.setMediaPlaybackRequiresUserGesture(false);
         if (Build.VERSION.SDK_INT >= 21) ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        webView.setWebViewClient(new WebViewClient());
+        webView.setWebViewClient(new WebViewClient() {
+            @Override public void onPageFinished(WebView view, String url) {
+                hideStageStatus();
+            }
+            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request != null && request.isForMainFrame()) {
+                    showStageStatus("KHONG TAI DUOC GIAO DIEN\n" + request.getUrl()
+                            + "\nLoi: " + error.getDescription()
+                            + "\n\nNhan OK tren remote de thu lai.", true);
+                }
+            }
+            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
+                if (request != null && request.isForMainFrame()) {
+                    showStageStatus("KHONG TAI DUOC GIAO DIEN\n" + request.getUrl()
+                            + "\nHTTP " + errorResponse.getStatusCode()
+                            + "\n\nNhan OK tren remote de thu lai.", true);
+                }
+            }
+        });
         webView.addJavascriptInterface(new PlayerBridge(), "PX");
         webView.addJavascriptInterface(new ResolverBridge(), "MR");
         webView.addJavascriptInterface(new Bridge(), "KB");
         root.addView(webView);
+        stageStatus = new TextView(this);
+        stageStatus.setTextSize(22);
+        stageStatus.setTextColor(0xFFFFFFFF);
+        stageStatus.setGravity(android.view.Gravity.CENTER);
+        stageStatus.setPadding(60, 60, 60, 60);
+        stageStatus.setText("Đang khởi động server Karaoke…");
+        root.addView(stageStatus, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         setContentView(root);
 
-        webView.loadUrl("http://127.0.0.1:8792/stage");
+        loadStageWhenReady();
         maybeShowPermissionScreen();
         // Floating QR overlay (starts with the service; hides itself if no permission/URL).
         if (QrOverlayService.isEnabled(this)) {
@@ -259,6 +287,59 @@ public class KaraokeActivity extends Activity {
         }
     }
 
+    private TextView stageStatus;
+    private boolean stageErrorShown = false;
+    private int stageLoadAttempts = 0;
+    private final android.os.Handler stageHandler = new android.os.Handler();
+
+    /**
+     * v1.0.3: the stage used to loadUrl("http://127.0.0.1:8792/stage") the
+     * instant onCreate ran — but the server binds its socket on a background
+     * thread inside the service, so on a slow box the WebView hit a dead port
+     * and stayed black, with nothing on screen to explain it. Now we wait
+     * until the server reports running (max ~8 s), load from the port it
+     * actually bound, and keep a readable native status on screen until the
+     * page paints; a load error shows the URL + error and OK retries.
+     */
+    private void loadStageWhenReady() {
+        stageErrorShown = false;
+        stageLoadAttempts = 0;
+        if (stageStatus != null) {
+            stageStatus.setVisibility(View.VISIBLE);
+            stageStatus.setText("Đang khởi động server Karaoke…");
+        }
+        stageHandler.post(new Runnable() {
+            @Override public void run() {
+                PlayerService s = PlayerService.getInstance();
+                RemoteServer srv = s == null ? null : s.getServer();
+                if (srv != null && srv.isRunning()) {
+                    if (webView != null) webView.loadUrl(srv.stageUrl());
+                    return;
+                }
+                stageLoadAttempts++;
+                if (stageLoadAttempts >= 27) { // ~8 s
+                    showStageStatus("KHONG TAI DUOC GIAO DIEN\nServer 8792 chua chay sau 8 giay."
+                            + "\n\nNhan OK tren remote de thu lai.", true);
+                    return;
+                }
+                stageHandler.postDelayed(this, 300);
+            }
+        });
+    }
+
+    private void showStageStatus(String text, boolean isError) {
+        stageErrorShown = isError;
+        if (stageStatus != null) {
+            stageStatus.setVisibility(View.VISIBLE);
+            stageStatus.setText(text);
+        }
+    }
+
+    private void hideStageStatus() {
+        stageErrorShown = false;
+        if (stageStatus != null) stageStatus.setVisibility(View.GONE);
+    }
+
     private void attachSurface() {
         PlayerService s = PlayerService.getInstance();
         if (s != null && surfaceView != null && surfaceView.getHolder().getSurface() != null) {
@@ -279,11 +360,14 @@ public class KaraokeActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        stageHandler.removeCallbacksAndMessages(null);
         if (webView != null) { webView.destroy(); webView = null; }
         super.onDestroy();
     }
 
     /** D-pad: centre = play/pause, left/right = prev/next, up/down = volume. */
+    private long lastBackPressMs = 0;
+
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
         // Back while the first-run permission overlay is up: just hide it
         // (and don't nag again) instead of finishing the activity — on the
@@ -292,6 +376,22 @@ public class KaraokeActivity extends Activity {
             getSharedPreferences("karaoke_setup", Context.MODE_PRIVATE)
                     .edit().putBoolean("perm_screen_done", true).apply();
             hidePermOverlay();
+            return true;
+        }
+        // Stage failed to load: OK on the remote retries instead of playing.
+        if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)
+                && stageErrorShown) {
+            loadStageWhenReady();
+            return true;
+        }
+        // Guard against an accidental double-Back exit (one stray second
+        // press used to quit the app and look like a crash): first Back
+        // only warns, a second one within 2 s exits.
+        if (keyCode == KeyEvent.KEYCODE_BACK && permOverlay == null) {
+            long now = System.currentTimeMillis();
+            if (now - lastBackPressMs < 2000) return super.onKeyDown(keyCode, event);
+            lastBackPressMs = now;
+            android.widget.Toast.makeText(this, "Bấm Back lần nữa để thoát Karaoke", android.widget.Toast.LENGTH_SHORT).show();
             return true;
         }
         PlayerService s = PlayerService.getInstance();
