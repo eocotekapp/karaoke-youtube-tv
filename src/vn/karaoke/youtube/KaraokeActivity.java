@@ -73,7 +73,7 @@ public class KaraokeActivity extends Activity {
 
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        startPlayerService();
+        try { startPlayerService(); } catch (Exception e) { CrashHandler.log(this, e); }
 
         FrameLayout root = new FrameLayout(this);
         root.setBackgroundColor(0xFF09090D);
@@ -88,7 +88,23 @@ public class KaraokeActivity extends Activity {
         });
         root.addView(surfaceView);
 
-        webView = new WebView(this);
+        // WebView may be missing/disabled on operator boxes (FPT Play 650):
+        // creating it then throws and used to kill the app on launch.
+        // Show a readable error instead of crashing.
+        try {
+            webView = new WebView(this);
+        } catch (Throwable t) {
+            CrashHandler.log(this, t);
+            TextView err = new TextView(this);
+            err.setTextSize(20);
+            err.setTextColor(0xFFFFFFFF);
+            err.setPadding(40, 40, 40, 40);
+            err.setText("KHONG MO DUOC WEBVIEW\n\nMay nay thieu hoac da tat Android System WebView nen app Karaoke khong mo duoc giao dien.\n\nLoi: " + t.toString() + "\n\nHay bat lai WebView trong Cai dat > Ung dung, hoac cai Android System WebView tu Play Store roi mo lai app.");
+            root.addView(err);
+            setContentView(root);
+            maybeShowPermissionScreen();
+            return;
+        }
         webView.setLayoutParams(new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
         webView.setBackgroundColor(0x00000000); // transparent: video shows through
@@ -108,9 +124,11 @@ public class KaraokeActivity extends Activity {
         maybeShowPermissionScreen();
         // Floating QR overlay (starts with the service; hides itself if no permission/URL).
         if (QrOverlayService.isEnabled(this)) {
-            Intent oi = new Intent(this, QrOverlayService.class);
-            if (Build.VERSION.SDK_INT >= 26) startForegroundService(oi);
-            else startService(oi);
+            try {
+                Intent oi = new Intent(this, QrOverlayService.class);
+                if (Build.VERSION.SDK_INT >= 26) startForegroundService(oi);
+                else startService(oi);
+            } catch (Exception e) { CrashHandler.log(this, e); }
         }
     }
 

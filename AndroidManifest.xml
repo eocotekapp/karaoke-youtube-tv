@@ -5,8 +5,8 @@
      NO Termux, NO com.gathin.* references. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="vn.karaoke.youtube"
-    android:versionCode="1"
-    android:versionName="1.0.0-pinggy">
+    android:versionCode="2"
+    android:versionName="1.0.1-pinggy">
 
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="30" />
 
@@ -27,11 +27,17 @@
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
 
     <application
+        android:name=".KaraokeApp"
         android:label="Karaoke YouTube"
         android:icon="@drawable/ic_app"
         android:theme="@style/KaraokeTheme"
         android:allowBackup="false"
         android:usesCleartextTraffic="true">
+        <activity
+            android:name=".CrashActivity"
+            android:label="Karaoke — loi"
+            android:exported="false"
+            android:screenOrientation="landscape" />
         <activity
             android:name=".KaraokeActivity"
             android:label="Karaoke YouTube"

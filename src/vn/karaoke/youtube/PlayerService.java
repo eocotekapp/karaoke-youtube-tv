@@ -81,16 +81,27 @@ public class PlayerService extends Service {
         // Foreground service (START_STICKY + ongoing notification, mediaPlayback)
         // is what exempts the app from Doze; the locks keep CPU + Wi-Fi alive
         // when the screen is off / the box idles for hours.
-        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "karaoke:playback");
-        if (!wakeLock.isHeld()) wakeLock.acquire();
-        android.net.wifi.WifiManager wm =
-                (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-        if (wm != null) {
-            wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "karaoke:wifi");
-            wifiLock.acquire();
+        // Locks are best-effort: on some vendor ROMs acquiring them throws,
+        // and that used to kill the whole service before startForeground().
+        try {
+            PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "karaoke:playback");
+            if (!wakeLock.isHeld()) wakeLock.acquire();
+        } catch (Exception e) { CrashHandler.log(this, e); }
+        try {
+            android.net.wifi.WifiManager wm =
+                    (android.net.wifi.WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+            if (wm != null) {
+                wifiLock = wm.createWifiLock(android.net.wifi.WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "karaoke:wifi");
+                wifiLock.acquire();
+            }
+        } catch (Exception e) { CrashHandler.log(this, e); }
+        try {
+            startForeground(NOTIF_ID, buildNotification("Karaoke YouTube đang chạy"));
+        } catch (Exception e) {
+            CrashHandler.log(this, e);
+            throw new RuntimeException(e);
         }
-        startForeground(NOTIF_ID, buildNotification("Karaoke YouTube đang chạy"));
         handler.postDelayed(endCheck, 3000);
         handler.postDelayed(watchdog, 10000);
         // Floating QR overlay (Pinggy URL only) — independent of the activity.
