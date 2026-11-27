@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.10-pinggy (versionCode 11) · **APK:** `KaraokeYouTube.apk` — **2,765,276 bytes**
+**Version:** 1.0.11-pinggy (versionCode 12) · **APK:** `KaraokeYouTube.apk` — **2,765,276 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -19,7 +19,8 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   internal NPE on `Channel$1.class` in those jars; 0.2.9 dexes cleanly.
 - Free Pinggy dies after ~60 min with a random URL each time → auto-reconnect
   (re-dial at ~55 min + reconnect on drop, ServerAliveInterval 30 s) and the
-  current URL + QR are always shown on the TV UI, stage page and notification.
+  current URL + QR are always shown on the phone panel, in the notification,
+  and as the floating QR (Pinggy URL only).
 - Optional basic auth (`b:user:pass` in the SSH username, free on Pinggy) in
   `/api/pinggy?action=auth&user=..&pass=..`, default off. No account/token needed.
 - `libcloudflared.so` (28 MB) is NOT bundled; no `com.gathin.*` references anywhere
@@ -96,6 +97,21 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   retries every 500 ms up to ~10 s when the service isn't up yet, and
   `onVideoSizeChanged` logs `Video: <w>x<h>` so the webhook log proves a video
   track exists.
+- v1.0.11 (bare TV stage, like the original Gathin): the stage page is now a
+  bare transparent page — `html,body{margin:0;padding:0;background:transparent;
+  height:100%;overflow:hidden}`, no topbar, no search box, no queue, no links,
+  no QR, no script at all (read from the real Gathin stage HTML,
+  `gathin-stage-original.html`). Video shows fullscreen from the SurfaceView;
+  when idle the screen is black (Activity root background). The Pinggy row
+  (Bật/Tắt/Đổi link) and QR-nổi row (Hiện/Ẩn/Cấp quyền) moved from the stage to
+  the phone panel (`/panel`), so nothing is lost. **Known gap:** track-end
+  advance still works without stage JS (`PlayerService.endCheck` polls the
+  player state every 3 s and plays the next queue item on code 0), but
+  stall/error advance does NOT — it lived only in stage JS (v1.0.10
+  `watchStall()` called `ctl('next')` on state -1/3; the original Gathin stage
+  had its own `startWatch` for the same job). A stalled/errored track now sits
+  until the user presses Next on the phone panel or remote. Not fixed here —
+  needs a service-side stall watchdog, deliberately left for a later version.
 - v1.0.9: Pinggy's REAL free URL is `https://<random>.run.pinggy-free.link`
   (and `https://<random>.free.pinggy.net`) — the old regex only matched
   `*.pinggy.link`, so the tunnel sat in "waiting-url" forever and no QR ever

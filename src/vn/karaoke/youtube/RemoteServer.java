@@ -482,9 +482,13 @@ public class RemoteServer {
         "<div id='results'></div><h2>Hàng đợi</h2><div id='queue'></div>" +
         "<h2>Playlist</h2><div id='playlists'></div>" +
         "<h2>Link</h2><div class='url' id='links'></div>" +
+        "<div class='row'><span>Pinggy:</span><button onclick=\"pinggy('enable')\">Bật</button><button onclick=\"pinggy('disable')\">Tắt</button><button onclick=\"pinggy('restart')\">Đổi link</button><span class='muted' id='pg'></span></div>" +
+        "<div class='row'><span>QR nổi:</span><button onclick=\"overlay('enable')\">Hiện</button><button onclick=\"overlay('disable')\">Ẩn</button><button onclick=\"overlay('grant')\">Cấp quyền</button><span class='muted'>QR chỉ hiện link Pinggy, tunnel chết thì tự ẩn</span></div>" +
         "<script>" +
         "async function api(p){const r=await fetch(p);return r.json();}" +
         "async function ctl(a){await api('/api/control?action='+a);refresh();}" +
+        "async function pinggy(a){await api('/api/pinggy?action='+a);refresh();}" +
+        "async function overlay(a){await api('/api/overlay?action='+a);refresh();}" +
         "async function search(){const q=document.getElementById('q').value;if(!q)return;" +
         "const d=await api('/api/search?q='+encodeURIComponent(q));" +
         "document.getElementById('results').innerHTML=(d.results||[]).map(v=>\"<div class='item' onclick=\\\"playnow('\"+v.id+\"','\"+v.title.replace(/'/g,'')+\"')\\\">\"+(v.thumb?\"<img src='\"+v.thumb+\"'>\":\"\")+v.title+\"<br><span class='muted'>\"+v.channel+\" • \"+v.durationText+\"</span> <button onclick=\\\"event.stopPropagation();enqueue('\"+v.id+\"','\"+v.title.replace(/'/g,'')+\"')\\\">+ Đợi</button></div>\").join('')||'Không tìm thấy';}" +
@@ -497,6 +501,7 @@ public class RemoteServer {
         "document.getElementById('now').textContent=cur+(s.sleepMinutesLeft?' • Tắt sau '+s.sleepMinutesLeft+'p':'');" +
         "document.getElementById('queue').innerHTML=(s.queue||[]).map((v,i)=>\"<div class='item'>\"+(i===s.currentIndex?'▶ ':'')+v.title+\" <button onclick=\\\"jump(\"+i+\")\\\">Phát</button> <button onclick=\\\"rm(\"+i+\")\\\">Xóa</button></div>\").join('')||'Hàng đợi trống';" +
         "document.getElementById('links').innerHTML='LAN: '+s.lanUrl+(s.pinggyUrl?'<br>Internet (Pinggy): '+s.pinggyUrl+' ('+s.pinggyState+')':'<br>Internet (Pinggy): '+s.pinggyState);" +
+        "document.getElementById('pg').textContent=s.pinggyState;" +
         "const pl=await api('/api/playlists');" +
         "document.getElementById('playlists').innerHTML=(pl.playlists||[]).map(p=>\"<div class='item'>\"+p.name+\" (\"+p.items.length+\") <button onclick=\\\"plPlay('\"+p.name+\"')\\\">Phát</button></div>\").join('')||'Chưa có playlist';}" +
         "async function jump(i){await api('/api/control?action=jump&index='+i);refresh();}" +
@@ -505,49 +510,11 @@ public class RemoteServer {
         "refresh();setInterval(refresh,5000);" +
         "</script></body></html>";
 
-    /** TV stage (served at /stage): transparent video area + controls, JS bridges PX/MR/KB. */
+    /** TV stage (served at /stage): bare transparent page, exactly like the
+     * original Gathin stage — zero UI on the TV, video fullscreen from the
+     * SurfaceView behind the transparent WebView; all controls live on the
+     * phone panel (/panel). No script: nothing on the stage needs JS. */
     private static final String STAGE_HTML =
         "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>" +
-        "<title>Karaoke YouTube</title><style>" + COMMON_CSS +
-        "html,body{background:transparent}" +
-        "#panel{position:fixed;left:0;right:0;bottom:0;background:rgba(9,9,13,.88);padding:14px;max-height:55vh;overflow:auto}" +
-        "#topbar{position:fixed;top:0;left:0;right:0;padding:10px 16px;background:rgba(9,9,13,.75);display:flex;gap:14px;align-items:center}</style></head><body>" +
-        "<div id='topbar'><b style='font-size:28px'>🎵 Karaoke YouTube</b><span class='muted' id='now'>Chưa phát bài nào</span>" +
-        "<span style='flex:1'></span><span class='muted' id='net'>LAN…</span></div>" +
-        "<div id='panel'><div class='row'><input id='q' placeholder='Tìm bài hát…' onkeydown='if(event.key===\"Enter\")search()'>" +
-        "<button onclick='search()'>🔍 Tìm</button>" +
-        "<button onclick=\"ctl('toggle')\">⏯</button><button onclick=\"ctl('prev')\">⏮</button><button onclick=\"ctl('next')\">⏭</button>" +
-        "<button onclick=\"document.getElementById('panel').style.display='none'\">Ẩn bảng</button></div>" +
-        "<div id='results'></div><h2>Hàng đợi</h2><div id='queue'></div>" +
-        "<div class='muted' id='links'></div>" +
-        "<div class='row'><span>Pinggy:</span><button onclick=\"pinggy('enable')\">Bật</button><button onclick=\"pinggy('disable')\">Tắt</button><button onclick=\"pinggy('restart')\">Đổi link</button><span class='muted' id='pg'></span></div>" +
-        "<div class='row'><span>QR nổi:</span><button onclick=\"overlay('enable')\">Hiện</button><button onclick=\"overlay('disable')\">Ẩn</button><button onclick=\"overlay('grant')\">Cấp quyền</button><span class='muted'>QR chỉ hiện link Pinggy, tunnel chết thì tự ẩn</span></div>" +
-        "<img id='qr' style='width:180px;background:#fff;padding:8px' alt='QR'>" +
-        "</div>" +
-        "<script>" +
-        "var curId='';" +
-        "function api(p){return fetch(p).then(r=>r.json());}" +
-        "function ctl(a){api('/api/control?action='+a).then(refresh);}" +
-        "function pinggy(a){api('/api/pinggy?action='+a).then(refresh);}" +
-        "function overlay(a){api('/api/overlay?action='+a).then(refresh);}" +
-        "async function search(){var q=document.getElementById('q').value;if(!q)return;" +
-        "var d=await api('/api/search?q='+encodeURIComponent(q));" +
-        "document.getElementById('results').innerHTML=(d.results||[]).map(v=>\"<div class='item' onclick=\\\"playnow('\"+v.id+\"','\"+v.title.replace(/'/g,'')+\"')\\\">\"+v.title+\"<br><span class='muted'>\"+v.channel+\" • \"+v.durationText+\"</span></div>\").join('')||'Không tìm thấy';}" +
-        "async function playnow(id,t){await api('/api/playnow?id='+id+'&title='+encodeURIComponent(t));curId=id;refresh();}" +
-        "async function refresh(){var s=await api('/api/state');" +
-        "document.getElementById('now').textContent=(s.current&&s.current.id)?('▶ '+s.current.title):'Chưa phát bài nào';" +
-        "document.getElementById('queue').innerHTML=(s.queue||[]).map((v,i)=>\"<div class='item'>\"+(i===s.currentIndex?'▶ ':'')+v.title+\"</div>\").join('')||'Hàng đợi trống';" +
-        "var link=s.pinggyUrl;" +
-        "document.getElementById('links').innerHTML='LAN: '+s.lanUrl+(s.pinggyUrl?'<br>Internet: '+s.pinggyUrl:'<br>Internet: '+s.pinggyState);" +
-        "document.getElementById('net').textContent=s.pinggyUrl?('🌐 '+s.pinggyUrl):('🏠 '+s.lanUrl);" +
-        "document.getElementById('pg').textContent=s.pinggyState;" +
-        "var qr=document.getElementById('qr'); if(link){qr.style.display='';qr.src='/api/qr?u='+encodeURIComponent(link);}else{qr.style.display='none';}" +
-        "try{if(window.PX){var st=PX.getState();}}catch(e){}}" +
-        "var stallTimer=null;" +
-        "function watchStall(){if(stallTimer)clearTimeout(stallTimer);" +
-        "stallTimer=setTimeout(function(){try{var st=PX.getState();var code=parseInt(st.split(',')[0]);" +
-        "if(code===-1||code===3){ctl('next');}}catch(e){}},1000);}" +
-        "if(window.KB){try{KB.onReady();}catch(e){}}" +
-        "refresh();setInterval(refresh,5000);setInterval(watchStall,5000);" +
-        "</script></body></html>";
+        "<title>Karaoke YouTube</title><style>html,body{margin:0;padding:0;background:transparent;height:100%;overflow:hidden}</style></head><body></body></html>";
 }
