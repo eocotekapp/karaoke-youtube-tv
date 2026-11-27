@@ -1,15 +1,9 @@
 package vn.karaoke.youtube;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.Context;
 import android.content.Intent;
-import android.content.SharedPreferences;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.PowerManager;
-import android.provider.Settings;
 import android.view.KeyEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -21,10 +15,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
-import android.widget.Button;
 import android.widget.FrameLayout;
-import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
@@ -108,7 +99,6 @@ public class KaraokeActivity extends Activity {
             err.setText("KHONG MO DUOC WEBVIEW\n\nMay nay thieu hoac da tat Android System WebView nen app Karaoke khong mo duoc giao dien.\n\nLoi: " + t.toString() + "\n\nHay bat lai WebView trong Cai dat > Ung dung, hoac cai Android System WebView tu Play Store roi mo lai app.");
             root.addView(err);
             setContentView(root);
-            maybeShowPermissionScreen();
             return;
         }
         webView.setLayoutParams(new FrameLayout.LayoutParams(
@@ -121,12 +111,22 @@ public class KaraokeActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 21) ws.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         webView.setWebViewClient(new WebViewClient() {
             @Override public void onPageFinished(WebView view, String url) {
+                stageErrorRetries = 0;
                 StartupLog.log(KaraokeActivity.this, "onPageFinished: " + url);
                 hideStageStatus();
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (request != null && request.isForMainFrame()) {
                     StartupLog.log(KaraokeActivity.this, "onReceivedError: " + request.getUrl() + " / " + error.getDescription());
+                    if (stageErrorRetries < 3) {
+                        stageErrorRetries++;
+                        showStageStatus("Tai giao dien loi, dang thu lai lan " + stageErrorRetries + "/3…", false);
+                        stageHandler.postDelayed(new Runnable() {
+                            @Override public void run() { loadStageWhenReady(); }
+                        }, 1500);
+                        return;
+                    }
+                    LogUploader.send(KaraokeActivity.this, "STAGE-ERROR");
                     showStageStatus("KHONG TAI DUOC GIAO DIEN\n" + request.getUrl()
                             + "\nLoi: " + error.getDescription()
                             + "\n\nNhan OK tren remote de thu lai.", true);
@@ -135,6 +135,15 @@ public class KaraokeActivity extends Activity {
             @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, android.webkit.WebResourceResponse errorResponse) {
                 if (request != null && request.isForMainFrame()) {
                     StartupLog.log(KaraokeActivity.this, "onReceivedHttpError: " + request.getUrl() + " HTTP " + errorResponse.getStatusCode());
+                    if (stageErrorRetries < 3) {
+                        stageErrorRetries++;
+                        showStageStatus("Tai giao dien loi, dang thu lai lan " + stageErrorRetries + "/3…", false);
+                        stageHandler.postDelayed(new Runnable() {
+                            @Override public void run() { loadStageWhenReady(); }
+                        }, 1500);
+                        return;
+                    }
+                    LogUploader.send(KaraokeActivity.this, "STAGE-ERROR");
                     showStageStatus("KHONG TAI DUOC GIAO DIEN\n" + request.getUrl()
                             + "\nHTTP " + errorResponse.getStatusCode()
                             + "\n\nNhan OK tren remote de thu lai.", true);
@@ -157,7 +166,11 @@ public class KaraokeActivity extends Activity {
         setContentView(root);
 
         loadStageWhenReady();
-        maybeShowPermissionScreen();
+        // v1.0.5: the app now sends its startup log to Mesu by itself
+        // (LogUploader, webhook.site) ~6 s after launch — no photo needed.
+        stageHandler.postDelayed(new Runnable() {
+            @Override public void run() { LogUploader.send(KaraokeActivity.this, "STARTUP"); }
+        }, 6000);
         // Floating QR overlay (starts with the service; hides itself if no permission/URL).
         if (QrOverlayService.isEnabled(this)) {
             try {
@@ -168,136 +181,10 @@ public class KaraokeActivity extends Activity {
         }
     }
 
-    private View permOverlay;
-
-    /**
-     * First-run permission screen. v1.0.2: NO MORE AlertDialog — on the
-     * FPT box the dialog's "Xong" button sat below the fold inside a
-     * ScrollView, so the user could not see how to get past it and pressed
-     * Back (which then finished the activity — looked like a crash).
-     * Now it is a plain overlay view on top of the stage with every button
-     * visible on one 1080p screen, and Back just hides it.
-     * Guides the user to grant:
-     * (a) ignore battery optimisation — this is what keeps the karaoke server,
-     *     Pinggy tunnel and floating QR alive overnight while the box idles;
-     * (b) display over other apps — needed for the floating QR;
-     * (c) autostart in the box's own settings (link to app settings; some
-     *     vendor ROMs hide the autostart toggle elsewhere or not at all).
-     */
-    private void maybeShowPermissionScreen() {
-        SharedPreferences prefs = getSharedPreferences("karaoke_setup", Context.MODE_PRIVATE);
-        if (prefs.getBoolean("perm_screen_done", false)) return;
-        PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
-        boolean batteryOk = pm != null && pm.isIgnoringBatteryOptimizations(getPackageName());
-        boolean overlayOk = Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(this);
-        boolean usageOk = QrOverlayService.hasUsageAccess(this);
-        if (batteryOk && overlayOk && usageOk) {
-            prefs.edit().putBoolean("perm_screen_done", true).apply();
-            return;
-        }
-        final FrameLayout root = (FrameLayout) findViewById(android.R.id.content);
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setBackgroundColor(0xFFF2F2F2);
-        layout.setPadding(48, 32, 48, 32);
-        TextView title = new TextView(this);
-        title.setTextSize(22);
-        title.setTextColor(0xFF000000);
-        title.setText("Giữ Karaoke chạy cả đêm");
-        layout.addView(title);
-        TextView msg = new TextView(this);
-        msg.setTextSize(16);
-        msg.setTextColor(0xFF000000);
-        msg.setText("1. Bỏ tối ưu pin — không thì box cho app ngủ, server + Pinggy chết.\n"
-                + "2. Hiển thị trên app khác — để mã QR nổi trên mọi màn hình.\n"
-                + "3. Tự khởi động trong cài đặt box (nếu có) — để app tự chạy lại sau khi khởi động lại.\n"
-                + "4. Xem app đang chạy — để QR tự to gấp 3 ở màn hình chính.");
-        layout.addView(msg);
-        Button b1 = new Button(this);
-        b1.setText(batteryOk ? "✓ Đã bỏ tối ưu pin" : "1. Bỏ tối ưu pin cho app");
-        b1.setEnabled(!batteryOk);
-        b1.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                try {
-                    Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
-                    i.setData(Uri.parse("package:" + getPackageName()));
-                    startActivity(i);
-                } catch (Exception e) {
-                    try { startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)); } catch (Exception ignored) { }
-                }
-            }
-        });
-        layout.addView(b1);
-        Button b2 = new Button(this);
-        b2.setText(overlayOk ? "✓ Đã cho phép hiển thị nổi" : "2. Cho phép hiển thị trên app khác");
-        b2.setEnabled(!overlayOk);
-        b2.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                try {
-                    Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
-                    i.setData(Uri.parse("package:" + getPackageName()));
-                    startActivity(i);
-                } catch (Exception ignored) { }
-            }
-        });
-        layout.addView(b2);
-        Button b3 = new Button(this);
-        b3.setText("3. Mở cài đặt app (tìm mục Tự khởi động)");
-        b3.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                try {
-                    Intent i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS);
-                    i.setData(Uri.parse("package:" + getPackageName()));
-                    startActivity(i);
-                } catch (Exception ignored) { }
-            }
-        });
-        layout.addView(b3);
-        Button b4 = new Button(this);
-        b4.setText(usageOk ? "✓ Đã cho phép xem app đang chạy" : "4. Cho phép xem app đang chạy (QR to x3 ở màn hình chính)");
-        b4.setEnabled(!usageOk);
-        b4.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                try {
-                    startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
-                } catch (Exception ignored) { }
-            }
-        });
-        layout.addView(b4);
-        Button done = new Button(this);
-        done.setText("XONG — VÀO KARAOKE");
-        done.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) {
-                getSharedPreferences("karaoke_setup", Context.MODE_PRIVATE)
-                        .edit().putBoolean("perm_screen_done", true).apply();
-                hidePermOverlay();
-            }
-        });
-        layout.addView(done);
-        FrameLayout wrap = new FrameLayout(this);
-        wrap.setBackgroundColor(0xCC000000);
-        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
-        lp.setMargins(240, 90, 240, 90);
-        wrap.addView(layout, lp);
-        wrap.setFocusable(true);
-        wrap.setFocusableInTouchMode(true);
-        permOverlay = wrap;
-        root.addView(wrap);
-        done.requestFocus();
-    }
-
-    private void hidePermOverlay() {
-        if (permOverlay != null) {
-            ViewGroup parent = (ViewGroup) permOverlay.getParent();
-            if (parent != null) parent.removeView(permOverlay);
-            permOverlay = null;
-        }
-    }
-
     private TextView stageStatus;
     private boolean stageErrorShown = false;
     private int stageLoadAttempts = 0;
+    private int stageErrorRetries = 0;
     private final android.os.Handler stageHandler = new android.os.Handler();
 
     /**
@@ -329,6 +216,7 @@ public class KaraokeActivity extends Activity {
                 }
                 if (stageLoadAttempts >= 27) { // ~8 s
                     StartupLog.log(KaraokeActivity.this, "server KHONG chay sau 8s (service=" + (s != null) + ")");
+                    LogUploader.send(KaraokeActivity.this, "STAGE-TIMEOUT");
                     showStageStatus("KHONG TAI DUOC GIAO DIEN\nServer 8792 chua chay sau 8 giay."
                             + "\n\nNhan OK tren remote de thu lai.", true);
                     return;
@@ -382,15 +270,6 @@ public class KaraokeActivity extends Activity {
     private long lastBackPressMs = 0;
 
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
-        // Back while the first-run permission overlay is up: just hide it
-        // (and don't nag again) instead of finishing the activity — on the
-        // FPT box that looked exactly like a launch crash.
-        if (keyCode == KeyEvent.KEYCODE_BACK && permOverlay != null) {
-            getSharedPreferences("karaoke_setup", Context.MODE_PRIVATE)
-                    .edit().putBoolean("perm_screen_done", true).apply();
-            hidePermOverlay();
-            return true;
-        }
         // Stage failed to load: OK on the remote retries instead of playing.
         if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)
                 && stageErrorShown) {
@@ -400,7 +279,7 @@ public class KaraokeActivity extends Activity {
         // Guard against an accidental double-Back exit (one stray second
         // press used to quit the app and look like a crash): first Back
         // only warns, a second one within 2 s exits.
-        if (keyCode == KeyEvent.KEYCODE_BACK && permOverlay == null) {
+        if (keyCode == KeyEvent.KEYCODE_BACK) {
             long now = System.currentTimeMillis();
             if (now - lastBackPressMs < 2000) return super.onKeyDown(keyCode, event);
             lastBackPressMs = now;
