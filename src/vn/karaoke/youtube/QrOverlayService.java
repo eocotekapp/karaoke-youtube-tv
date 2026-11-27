@@ -104,6 +104,10 @@ public class QrOverlayService extends Service {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getBoolean("overlay_enabled", true);
     }
+    /** Overlay permission granted (needed before starting the service at all). */
+    public static boolean canShow(Context ctx) {
+        return Build.VERSION.SDK_INT < 23 || Settings.canDrawOverlays(ctx);
+    }
     public static void setEnabled(Context ctx, boolean on) {
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putBoolean("overlay_enabled", on).apply();
@@ -132,13 +136,18 @@ public class QrOverlayService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        // MUST call startForeground() FIRST, before anything else.
+        // A service started with startForegroundService() has ~5 s to call
+        // startForeground() — even when it is about to stop itself. The old
+        // code checked overlay permission first and called stopSelf() without
+        // startForeground(), and Android killed the WHOLE app process with
+        // RemoteServiceException ("did not then call startForeground()").
+        // That was the crash on the FPT Play 650 (log 2026-11-27 22:21).
+        startForegroundQuiet();
         if (Build.VERSION.SDK_INT >= 23 && !Settings.canDrawOverlays(this)) {
-            stopSelf(); // first-run permission screen guides the user to grant it
+            stopSelf(); // no overlay permission yet — QR stays off, app lives
             return;
         }
-        // Started via startForegroundService() — must call startForeground()
-        // within 5 s on API 26+, or the system kills this service.
-        startForegroundQuiet();
         wm = (WindowManager) getSystemService(WINDOW_SERVICE);
         DisplayMetrics dm = getResources().getDisplayMetrics();
         screenW = dm.widthPixels;

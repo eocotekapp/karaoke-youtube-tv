@@ -172,7 +172,8 @@ public class KaraokeActivity extends Activity {
             @Override public void run() { LogUploader.send(KaraokeActivity.this, "STARTUP"); }
         }, 6000);
         // Floating QR overlay (starts with the service; hides itself if no permission/URL).
-        if (QrOverlayService.isEnabled(this)) {
+        // Only start it when overlay permission is granted (see PlayerService).
+        if (QrOverlayService.isEnabled(this) && QrOverlayService.canShow(this)) {
             try {
                 Intent oi = new Intent(this, QrOverlayService.class);
                 if (Build.VERSION.SDK_INT >= 26) startForegroundService(oi);

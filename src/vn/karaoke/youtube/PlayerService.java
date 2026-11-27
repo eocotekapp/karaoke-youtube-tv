@@ -110,7 +110,10 @@ public class PlayerService extends Service {
         handler.postDelayed(endCheck, 3000);
         handler.postDelayed(watchdog, 10000);
         // Floating QR overlay (Pinggy URL only) — independent of the activity.
-        if (QrOverlayService.isEnabled(this)) {
+        // Only start it when overlay permission is granted: starting it
+        // without permission made it stop without startForeground() and
+        // Android killed the whole app (RemoteServiceException, 2026-11-27).
+        if (QrOverlayService.isEnabled(this) && QrOverlayService.canShow(this)) {
             Intent oi = new Intent(this, QrOverlayService.class);
             if (Build.VERSION.SDK_INT >= 26) startForegroundService(oi);
             else startService(oi);
