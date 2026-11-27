@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.6-pinggy (versionCode 7) · **APK:** `KaraokeYouTube.apk` — **2,671,066 bytes**
+**Version:** 1.0.8-pinggy (versionCode 9) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -8,9 +8,15 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
 `~/workspace/karaoke-split-inventory.md`.
 
 ## Internet exposure: Pinggy ONLY — no Cloudflare, no Tailscale, no ngrok/zrok, no Termux
-- `PinggyTunnel` uses pure-Java SSH (**JSch 0.1.55, ~300 KB**, in-process, no binary,
+- `PinggyTunnel` uses pure-Java SSH (**JSch 0.2.9, mwiede fork**, in-process, no binary,
   no extra process) to `free.pinggy.io:443`, remote forwarding `-R0:localhost:8792`,
   parses the returned `https://<random>.pinggy.link` URL from the shell output.
+  **Why 0.2.9:** JSch 0.1.55 (2018) only offers ssh-rsa (SHA-1) host-key algorithms
+  and Pinggy's modern SSH server refuses them — every connect failed with
+  "Algorithm negotiation fail" (seen on the FPT Play 650, 2026-11-27). The mwiede
+  fork offers rsa-sha2-256/512, ssh-ed25519, ecdsa, curve25519 KEX. **Do NOT
+  upgrade to 0.2.16+ / 0.2.21:** d8 8.2.2 (build-tools 34.0.0) crashes with an
+  internal NPE on `Channel$1.class` in those jars; 0.2.9 dexes cleanly.
 - Free Pinggy dies after ~60 min with a random URL each time → auto-reconnect
   (re-dial at ~55 min + reconnect on drop, ServerAliveInterval 30 s) and the
   current URL + QR are always shown on the TV UI, stage page and notification.
@@ -58,12 +64,31 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
 - `BootReceiver` — `BOOT_COMPLETED` → starts `PlayerService` (→ RemoteServer 8792
   + Pinggy tunnel + overlay). No launcher coupling.
 
+## Auto-log (telemetry) — the app sends its log home by itself (v1.0.5+)
+- `LogUploader` POSTs to a webhook.site token (see `LogUploader.ENDPOINT`,
+  created 2026-11-27, **expires ~2026-12-04** — mint a fresh token + rebuild if
+  logs stop arriving). Every upload carries the full in-memory log (last 120
+  lines) + device info. No credentials are ever sent.
+- Tags: `STARTUP` (~6 s after launch), `CRASH` (with full stack trace + thread,
+  sent synchronously, 4 s cap), `STAGE-ERROR` / `STAGE-TIMEOUT`,
+  `PINGGY` (tunnel online + any tunnel error, e.g. "Algorithm negotiation fail"),
+  `SEARCH-ERR` (search failed on all sources), `RESOLVE-ERR` (no playable stream),
+  `PLAY-ERR` (ExoPlayer error / resolve / prepare failure). Also logged (no
+  upload): each search result count + source, each resolve, play start, track
+  end → next, sleep-timer set, boot intent, QR first shown with a URL.
+- The first-run permission screen was REMOVED in v1.0.5: the app opens straight
+  to the stage. Battery/overlay/usage grants are no longer prompted at first run.
+
+## Crash history on the real box (FPT Play 650, 2026-11-27)
+- v1.0.0–v1.0.5 crashed on launch with `RemoteServiceException: startForegroundService()
+  did not then call startForeground(): QrOverlayService` — the overlay service
+  checked overlay permission first and called `stopSelf()` without `startForeground()`.
+  **Fix in v1.0.7:** `startForeground()` is called first in `onCreate()`, and the
+  service is only started when overlay permission is already granted.
+- v1.0.7 confirmed working on the box: stage loads (`onPageFinished`), no crash.
+  The floating QR stays off until overlay permission is granted.
+
 ## Autostart + anti-Doze (chống ngủ đông)
-- First-run screen in `KaraokeActivity` (once) guides the user to: (a) ignore battery
-  optimisation (`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, checked via
-  `PowerManager.isIgnoringBatteryOptimizations()`), (b) display over other apps
-  (`ACTION_MANAGE_OVERLAY_PERMISSION`), (c) the box's autostart toggle via app
-  settings (link only — the ROM may hide it elsewhere).
 - `PlayerService` holds a `PARTIAL_WAKE_LOCK` ("karaoke:playback") and a
   `WifiLock` (`WIFI_MODE_FULL_LOW_LATENCY`, "karaoke:wifi") while the server/tunnel
   runs; `onTaskRemoved()` restarts the service; a 10 s watchdog revives
@@ -86,11 +111,16 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   whole APK; JSch `setPortForwardingR`, `createWifiLock`, `startForeground`,
   `onTaskRemoved` all present in the dex.
 
-## NOT verified (no working TV Box available — K8 is dead, replacement not bought)
-- Install + launch on a real box; ExoPlayer playback of InnerTube streams
-  (itag/cipher handling, HLS via `/stream` proxy); JSch→Pinggy handshake from
-  inside the APK (host-key acceptance, shell-channel URL parsing, 60-min
-  re-dial timing); overlay permission grant flow on the vendor ROM; boot
+## Verified on the real box (FPT Play 650, 2026-11-27)
+- Install + launch + stage load (`onPageFinished`) confirmed on v1.0.7.
+- Crash root cause found from the auto-log itself (RemoteServiceException,
+  QrOverlayService) and fixed in v1.0.7.
+
+## NOT yet verified on the real box
+- ExoPlayer playback of InnerTube streams (itag/cipher handling, HLS via
+  `/stream` proxy); **JSch 0.2.9 → Pinggy handshake + public URL** (the 1.0.8
+  fix — needs one open of v1.0.8 on the box, the PINGGY log will confirm it);
+  60-min re-dial timing; overlay permission grant flow on the vendor ROM; boot
   autostart on the vendor ROM; battery-whitelist behaviour overnight.
 - Known fragility (same as the original): InnerTube can break when YouTube
   changes it; signature-ciphered formats are skipped (no deciphering); no
