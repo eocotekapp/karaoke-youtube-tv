@@ -46,6 +46,12 @@ public class PlayerService extends Service {
         }
     };
     // Auto-advance when the current video ends (poll PX state, cheap).
+    // Stall watchdog (v1.0.12): the old stage JS had watchStall() which
+    // advanced on -1 (error) or 3 (buffering); the bare v1.0.11 stage has
+    // no JS anymore, so the service does it here. A track stuck buffering
+    // or errored for ~30 s (10 consecutive 3 s polls) is skipped exactly
+    // like an ended track. Paused (2) never counts as a stall.
+    private int stallPolls = 0;
     private final Runnable endCheck = new Runnable() {
         @Override public void run() {
             try {
@@ -53,10 +59,22 @@ public class PlayerService extends Service {
                     String st = player.getState();
                     int code = Integer.parseInt(st.split(",")[0]);
                     if (code == 0) { // ended
+                        stallPolls = 0;
                         StartupLog.log("Bai vua het, chuyen bai ke");
                         LibraryState.Item n = library.next();
                         if (n != null) playNow(n);
                         else player.stop();
+                    } else if ((code == 3 || code == -1) && library != null && library.current() != null) {
+                        stallPolls++;
+                        if (stallPolls >= 10) { // ~30 s stuck
+                            stallPolls = 0;
+                            StartupLog.log("Bai ket/loi, chuyen bai ke");
+                            LibraryState.Item n = library.next();
+                            if (n != null) playNow(n);
+                            else player.stop();
+                        }
+                    } else {
+                        stallPolls = 0;
                     }
                 }
             } catch (Exception ignored) { }

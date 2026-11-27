@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.11-pinggy (versionCode 12) · **APK:** `KaraokeYouTube.apk` — **2,765,276 bytes**
+**Version:** 1.0.12-pinggy (versionCode 13) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -112,6 +112,13 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   had its own `startWatch` for the same job). A stalled/errored track now sits
   until the user presses Next on the phone panel or remote. Not fixed here —
   needs a service-side stall watchdog, deliberately left for a later version.
+- v1.0.12 (service-side stall watchdog — closes the v1.0.11 gap above):
+  `PlayerService.endCheck` (3 s poll) now counts consecutive polls where a
+  current queue item exists and the player state is 3 (buffering) or -1
+  (error); at 10 polls (~30 s) it logs "Bai ket/loi, chuyen bai ke" and
+  advances exactly like the ended-path (`library.next()` → `playNow()`,
+  `player.stop()` if the queue is empty). Any other state (1 playing,
+  0 ended, 2 paused) resets the counter — paused never counts as a stall.
 - v1.0.9: Pinggy's REAL free URL is `https://<random>.run.pinggy-free.link`
   (and `https://<random>.free.pinggy.net`) — the old regex only matched
   `*.pinggy.link`, so the tunnel sat in "waiting-url" forever and no QR ever
