@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Karaoke YouTube standalone — clean rewrite (2026-11-27).
+     Package vn.karaoke.youtube. Pinggy ONLY for internet exposure (JSch SSH,
+     in-process). NO Cloudflare / libcloudflared.so, NO Tailscale, NO ngrok/zrok,
+     NO Termux, NO com.gathin.* references. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="vn.karaoke.youtube"
+    android:versionCode="1"
+    android:versionName="1.0.0-pinggy">
+
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="30" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Usage access (granted in Settings, not at install): lets the floating QR
+         know when the launcher/home screen is in the foreground so it can grow
+         3x there. Without it the overlay falls back to the running-process list. -->
+    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
+
+    <uses-feature android:name="android.software.leanback" android:required="false" />
+    <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+
+    <application
+        android:label="Karaoke YouTube"
+        android:icon="@drawable/ic_app"
+        android:theme="@style/KaraokeTheme"
+        android:allowBackup="false"
+        android:usesCleartextTraffic="true">
+        <activity
+            android:name=".KaraokeActivity"
+            android:label="Karaoke YouTube"
+            android:icon="@drawable/ic_app"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:windowSoftInputMode="adjustPan">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service
+            android:name=".PlayerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+        <service
+            android:name=".QrOverlayService"
+            android:exported="false" />
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="vn.karaoke.youtube.action.PING" />
+                <action android:name="vn.karaoke.youtube.action.REVIVE" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

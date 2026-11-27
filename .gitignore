@@ -1,0 +1,6 @@
+# Build outputs, binaries and secrets — never committed.
+*.apk
+*.idsig
+*.jks
+build/
+libs/
