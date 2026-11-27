@@ -35,7 +35,7 @@ mv libs/extracted/core-1.8.0/classes.jar libs/extracted/core-1.8.0-classes.jar
 dl "$MC/androidx/annotation/annotation/1.3.0/annotation-1.3.0.jar" libs/annotation-1.3.0.jar
 dl "$MC/androidx/collection/collection/1.2.0/collection-1.2.0.jar" libs/collection-1.2.0.jar
 dl "$MC/com/google/guava/guava/31.1-android/guava-31.1-android.jar" libs/guava-31.1-android.jar
-dl "$MC/com/jcraft/jsch/0.1.55/jsch-0.1.55.jar" libs/jsch-0.1.55.jar
+dl "$MC/com/github/mwiede/jsch/0.2.9/jsch-0.2.9.jar" libs/jsch-0.2.9.jar
 # ZXing is only used by the JVM QR round-trip test, not by the APK build.
 dl "$MC/com/google/zxing/core/3.5.2/core-3.5.2.jar" libs/zxing-core-3.5.2.jar
 

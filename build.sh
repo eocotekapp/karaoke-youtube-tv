@@ -13,7 +13,7 @@ export PATH="$JAVA_BIN:$PATH"
 cd "$APP"
 
 DEPS=""
-for j in libs/extracted/*-classes.jar libs/jsch-0.1.55.jar libs/guava-31.1-android.jar libs/annotation-1.3.0.jar libs/collection-1.2.0.jar; do
+for j in libs/extracted/*-classes.jar libs/jsch-0.2.9.jar libs/guava-31.1-android.jar libs/annotation-1.3.0.jar libs/collection-1.2.0.jar; do
   DEPS="$DEPS:$j"
 done
 DEPS="${DEPS#:}"

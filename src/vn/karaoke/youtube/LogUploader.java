@@ -69,6 +69,9 @@ public class LogUploader {
         }, "log-upload").start();
     }
 
+    /** Fire-and-forget send without a Context (any feature class can call it). */
+    public static void send(final String tag) { send(StartupLog.appContext(), tag); }
+
     /** Blocking send with a ~4 s cap (crash path: the process is dying anyway). */
     public static void sendSync(final Context ctx, final String tag) {
         sendSyncWithTrace(ctx, tag, null, null);

@@ -58,6 +58,8 @@ public class MesuPlayer {
             @Override public void onPlayerError(PlaybackException error) {
                 lastState = -1;
                 lastError = error.getMessage() == null ? "playback error" : error.getMessage();
+                StartupLog.log("Phat LOI (" + currentId + " '" + currentTitle + "'): " + error);
+                LogUploader.send("PLAY-ERR");
             }
         });
     }
@@ -73,6 +75,7 @@ public class MesuPlayer {
         currentTitle = title == null ? "" : title;
         lastState = 3;
         lastError = "";
+        StartupLog.log("Phat: " + videoId + " '" + currentTitle + "'");
         new Thread(new Runnable() {
             @Override public void run() {
             try {
@@ -88,6 +91,8 @@ public class MesuPlayer {
             } catch (Exception e) {
                 lastState = -1;
                 lastError = e.getMessage() == null ? "resolve failed" : e.getMessage();
+                StartupLog.log("Phat " + videoId + " LOI resolve: " + e);
+                LogUploader.send("PLAY-ERR");
             }
             }
         }).start();
@@ -124,13 +129,16 @@ public class MesuPlayer {
                 }
                 break; // first usable candidate wins; stage watchdog advances on stall
             }
-            if (source == null) { lastState = -1; lastError = "no usable candidate"; return; }
+            if (source == null) { lastState = -1; lastError = "no usable candidate"; StartupLog.log("Phat " + currentId + " LOI: no usable candidate"); LogUploader.send("PLAY-ERR"); return; }
             player.setMediaSource(source);
             player.prepare();
             player.setPlayWhenReady(true);
+            StartupLog.log("Phat " + currentId + ": da chuan bi xong, dang phat");
         } catch (Exception e) {
             lastState = -1;
             lastError = e.getMessage() == null ? "prepare failed" : e.getMessage();
+            StartupLog.log("Phat " + currentId + " LOI prepare: " + e);
+            LogUploader.send("PLAY-ERR");
         }
     }
 

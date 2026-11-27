@@ -182,8 +182,12 @@ public class YoutubeApi {
                     }
                 }
             }
-            if (!out.isEmpty()) return out;
+            if (!out.isEmpty()) {
+                StartupLog.log("Tim '" + query + "' -> " + out.size() + " ket qua (InnerTube)");
+                return out;
+            }
         } catch (Exception e) {
+            StartupLog.log("Tim '" + query + "' InnerTube LOI: " + e + " -> thu Invidious");
             // fall through to Invidious
         }
         return searchInvidious(query);
@@ -207,9 +211,14 @@ public class YoutubeApi {
                     v.thumb = "https://i.ytimg.com/vi/" + v.id + "/hqdefault.jpg";
                     if (!v.id.isEmpty()) out.add(v);
                 }
-                if (!out.isEmpty()) return out;
+                if (!out.isEmpty()) {
+                    StartupLog.log("Tim '" + query + "' -> " + out.size() + " ket qua (Invidious " + host + ")");
+                    return out;
+                }
             } catch (Exception ignored) { }
         }
+        StartupLog.log("Tim '" + query + "' THAT BAI tren moi nguon");
+        LogUploader.send("SEARCH-ERR");
         throw new Exception("search failed on all sources");
     }
 
@@ -287,15 +296,20 @@ public class YoutubeApi {
                 result.put("title", inv.optString("title", ""));
                 result.put("candidates", inv.optJSONArray("candidates"));
             } else {
+                StartupLog.log("Resolve " + videoId + " LOI: " + e);
                 throw e;
             }
         }
         if (result.optJSONArray("candidates") == null || result.optJSONArray("candidates").length() == 0) {
             JSONObject oe = oEmbedItem(videoId);
             if (oe != null) result.put("title", oe.optString("title", result.optString("title")));
+            StartupLog.log("Resolve " + videoId + " THAT BAI: no playable stream");
+            LogUploader.send("RESOLVE-ERR");
             throw new Exception("no playable stream for " + videoId);
         }
         putCached(directCache, videoId, result.toString(), DIRECT_TTL_MS);
+        StartupLog.log("Resolve " + videoId + " OK: " + result.optJSONArray("candidates").length()
+                + " ung vien, '" + result.optString("title") + "'");
         return result;
     }
 

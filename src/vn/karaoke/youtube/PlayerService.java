@@ -53,6 +53,7 @@ public class PlayerService extends Service {
                     String st = player.getState();
                     int code = Integer.parseInt(st.split(",")[0]);
                     if (code == 0) { // ended
+                        StartupLog.log("Bai vua het, chuyen bai ke");
                         LibraryState.Item n = library.next();
                         if (n != null) playNow(n);
                         else player.stop();
@@ -164,6 +165,7 @@ public class PlayerService extends Service {
     public void setSleepMinutes(int minutes) {
         if (minutes <= 0) { sleepDeadlineMs = 0; handler.removeCallbacks(sleepCheck); return; }
         sleepDeadlineMs = System.currentTimeMillis() + minutes * 60L * 1000L;
+        StartupLog.log("Hen gio tat: " + minutes + " phut");
         handler.removeCallbacks(sleepCheck);
         handler.postDelayed(sleepCheck, 15000);
     }

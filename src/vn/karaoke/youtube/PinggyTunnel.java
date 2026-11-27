@@ -11,8 +11,14 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Pinggy tunnel — PURE-JAVA SSH (JSch ~300 KB), in-process, NO cloudflared binary,
- * NO Termux, NO extra process. Replaces TunnelManager.
+ * Pinggy tunnel — PURE-JAVA SSH (JSch 0.2.x, mwiede fork), in-process,
+ * NO cloudflared binary, NO Termux, NO extra process. Replaces TunnelManager.
+ *
+ * NOTE (2026-11-27): JSch 0.1.55 (2018) was REMOVED — it only offers ssh-rsa
+ * (SHA-1) host-key algorithms, and Pinggy's modern SSH server refuses them:
+ * every connect failed with "Algorithm negotiation fail". The mwiede fork
+ * 0.2.9 offers rsa-sha2-256/512, ssh-ed25519, ecdsa and curve25519 KEX,
+ * same package (com.jcraft.jsch) and same API, drop-in replacement.
  *
  * Free Pinggy: tunnel dies after ~60 min and the URL is random each time, so this
  * class auto-reconnects (scheduled re-dial at ~55 min, plus reconnect on drop)
@@ -72,6 +78,11 @@ public class PinggyTunnel {
 
     private void setState(String s) {
         state = s;
+        // Full telemetry: every tunnel state is logged, and the important
+        // ones (online / any error) are uploaded immediately so Mesu sees
+        // the tunnel health without anyone screenshotting the stage.
+        StartupLog.log("Pinggy: " + s + (publicUrl.isEmpty() ? "" : " " + publicUrl));
+        if ("online".equals(s) || s.startsWith("error")) LogUploader.send("PINGGY");
         if (listener != null) listener.onState(s);
     }
 
@@ -108,6 +119,7 @@ public class PinggyTunnel {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
+                StartupLog.log("Pinggy LOI: " + e);
                 setState("error: " + (e.getMessage() == null ? "ssh failed" : e.getMessage()));
             }
             if (!wantRun) break;

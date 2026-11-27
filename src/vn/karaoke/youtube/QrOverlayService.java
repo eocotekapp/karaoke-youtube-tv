@@ -302,7 +302,10 @@ public class QrOverlayService extends Service {
             currentUrl = url;
             userHidden = false; // a fresh tunnel re-shows the QR
             Bitmap bmp = QrCode.bitmap(url, Math.max(512, dp(GATHIN_QR_DP * currentScale)));
-            if (bmp != null) qrView.setImageBitmap(bmp);
+            if (bmp != null) {
+                qrView.setImageBitmap(bmp);
+                StartupLog.log("QR noi: hien link " + url);
+            }
             else { card.setVisibility(View.GONE); return; }
         }
         if (userHidden) { card.setVisibility(View.GONE); return; }

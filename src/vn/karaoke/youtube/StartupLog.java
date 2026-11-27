@@ -21,11 +21,23 @@ public class StartupLog {
     private static final List<String> lines = new ArrayList<String>();
     private static final SimpleDateFormat FMT =
             new SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
+    /** Application context, set once by KaraokeApp — lets ANY class log
+     *  (PinggyTunnel, YoutubeApi, MesuPlayer...) without passing a Context. */
+    private static volatile Context appCtx = null;
+
+    public static void init(Context ctx) {
+        if (ctx != null) appCtx = ctx.getApplicationContext();
+    }
+    public static Context appContext() { return appCtx; }
+
+    /** Log without a Context (uses the stored app context for the file). */
+    public static synchronized void log(String msg) { log(appCtx, msg); }
 
     public static synchronized void log(Context ctx, String msg) {
         String line = FMT.format(new Date()) + " " + msg;
         lines.add(line);
-        while (lines.size() > 40) lines.remove(0);
+        while (lines.size() > 120) lines.remove(0);
+        if (ctx == null) return; // memory-only until the app context is set
         try {
             File dir = ctx.getExternalFilesDir(null);
             if (dir == null) dir = ctx.getFilesDir();

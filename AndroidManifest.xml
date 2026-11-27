@@ -5,8 +5,8 @@
      NO Termux, NO com.gathin.* references. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="vn.karaoke.youtube"
-    android:versionCode="8"
-    android:versionName="1.0.7-pinggy">
+    android:versionCode="9"
+    android:versionName="1.0.8-pinggy">
 
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="30" />
 

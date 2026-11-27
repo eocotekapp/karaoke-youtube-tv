@@ -7,6 +7,7 @@ public class KaraokeApp extends Application {
     @Override
     public void onCreate() {
         super.onCreate();
+        StartupLog.init(this);
         CrashHandler.install(this);
         StartupLog.log(this, "App start (KaraokeApp.onCreate)");
     }
