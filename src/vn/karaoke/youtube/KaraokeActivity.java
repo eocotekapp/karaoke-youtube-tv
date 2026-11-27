@@ -132,8 +132,16 @@ public class KaraokeActivity extends Activity {
         }
     }
 
+    private View permOverlay;
+
     /**
-     * First-run permission screen (shown once). Guides the user to grant:
+     * First-run permission screen. v1.0.2: NO MORE AlertDialog — on the
+     * FPT box the dialog's "Xong" button sat below the fold inside a
+     * ScrollView, so the user could not see how to get past it and pressed
+     * Back (which then finished the activity — looked like a crash).
+     * Now it is a plain overlay view on top of the stage with every button
+     * visible on one 1080p screen, and Back just hides it.
+     * Guides the user to grant:
      * (a) ignore battery optimisation — this is what keeps the karaoke server,
      *     Pinggy tunnel and floating QR alive overnight while the box idles;
      * (b) display over other apps — needed for the floating QR;
@@ -151,16 +159,23 @@ public class KaraokeActivity extends Activity {
             prefs.edit().putBoolean("perm_screen_done", true).apply();
             return;
         }
+        final FrameLayout root = (FrameLayout) findViewById(android.R.id.content);
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setPadding(40, 30, 40, 30);
+        layout.setBackgroundColor(0xFFF2F2F2);
+        layout.setPadding(48, 32, 48, 32);
+        TextView title = new TextView(this);
+        title.setTextSize(22);
+        title.setTextColor(0xFF000000);
+        title.setText("Giữ Karaoke chạy cả đêm");
+        layout.addView(title);
         TextView msg = new TextView(this);
-        msg.setTextSize(20);
-        msg.setText("Để Karaoke + QR chạy cả đêm không bị box tắt:\n\n" +
-                "1. Bỏ tối ưu pin cho app — nếu không, Android sẽ cho app ngủ đông khi màn hình tắt, server 8792 và tunnel Pinggy sẽ chết.\n\n" +
-                "2. Cho phép hiển thị trên app khác — để mã QR nổi trên mọi màn hình.\n\n" +
-                "3. Bật tự khởi động trong cài đặt của box (nếu ROM có mục này) — để app tự chạy lại sau khi khởi động lại.\n\n" +
-                "4. Cho phép xem app đang chạy — để mã QR tự to gấp 3 khi anh đang ở màn hình chính, và nhỏ lại như gốc khi mở app khác. Không cấp quyền này thì QR vẫn hiện, nhưng không tự to lên được.");
+        msg.setTextSize(16);
+        msg.setTextColor(0xFF000000);
+        msg.setText("1. Bỏ tối ưu pin — không thì box cho app ngủ, server + Pinggy chết.\n"
+                + "2. Hiển thị trên app khác — để mã QR nổi trên mọi màn hình.\n"
+                + "3. Tự khởi động trong cài đặt box (nếu có) — để app tự chạy lại sau khi khởi động lại.\n"
+                + "4. Xem app đang chạy — để QR tự to gấp 3 ở màn hình chính.");
         layout.addView(msg);
         Button b1 = new Button(this);
         b1.setText(batteryOk ? "✓ Đã bỏ tối ưu pin" : "1. Bỏ tối ưu pin cho app");
@@ -214,26 +229,35 @@ public class KaraokeActivity extends Activity {
         });
         layout.addView(b4);
         Button done = new Button(this);
-        done.setText("Xong");
+        done.setText("XONG — VÀO KARAOKE");
         done.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
                 getSharedPreferences("karaoke_setup", Context.MODE_PRIVATE)
                         .edit().putBoolean("perm_screen_done", true).apply();
-                if (permDialog != null) permDialog.dismiss();
+                hidePermOverlay();
             }
         });
         layout.addView(done);
-        ScrollView scroll = new ScrollView(this);
-        scroll.addView(layout);
-        permDialog = new AlertDialog.Builder(this)
-                .setTitle("Giữ Karaoke chạy cả đêm")
-                .setView(scroll)
-                .setCancelable(true)
-                .create();
-        permDialog.show();
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setBackgroundColor(0xCC000000);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+        lp.setMargins(240, 90, 240, 90);
+        wrap.addView(layout, lp);
+        wrap.setFocusable(true);
+        wrap.setFocusableInTouchMode(true);
+        permOverlay = wrap;
+        root.addView(wrap);
+        done.requestFocus();
     }
 
-    private AlertDialog permDialog;
+    private void hidePermOverlay() {
+        if (permOverlay != null) {
+            ViewGroup parent = (ViewGroup) permOverlay.getParent();
+            if (parent != null) parent.removeView(permOverlay);
+            permOverlay = null;
+        }
+    }
 
     private void attachSurface() {
         PlayerService s = PlayerService.getInstance();
@@ -261,6 +285,15 @@ public class KaraokeActivity extends Activity {
 
     /** D-pad: centre = play/pause, left/right = prev/next, up/down = volume. */
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // Back while the first-run permission overlay is up: just hide it
+        // (and don't nag again) instead of finishing the activity — on the
+        // FPT box that looked exactly like a launch crash.
+        if (keyCode == KeyEvent.KEYCODE_BACK && permOverlay != null) {
+            getSharedPreferences("karaoke_setup", Context.MODE_PRIVATE)
+                    .edit().putBoolean("perm_screen_done", true).apply();
+            hidePermOverlay();
+            return true;
+        }
         PlayerService s = PlayerService.getInstance();
         if (s != null) {
             switch (keyCode) {
