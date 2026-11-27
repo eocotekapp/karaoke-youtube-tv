@@ -2,8 +2,12 @@ package vn.karaoke.youtube;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Bitmap;
+import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.TypedValue;
+import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -16,6 +20,8 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
+import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 
 /**
@@ -27,6 +33,20 @@ import android.widget.TextView;
 public class KaraokeActivity extends Activity {
     private WebView webView;
     private SurfaceView surfaceView;
+
+    // v1.0.13: in-activity QR card (Gathin original qrCard) — visible on the
+    // TV screen itself, no permission needed. Pinggy URL only; hidden while
+    // the tunnel is down/reconnecting. Polled every 2 s via stageHandler.
+    private LinearLayout qrCard;
+    private ImageView qrImage;
+    private String currentQrUrl = "";
+    private final Runnable qrPoll = new Runnable() {
+        @Override public void run() {
+            try { refreshQrCard(); }
+            catch (Throwable t) { StartupLog.log(KaraokeActivity.this, "QR man hinh LOI: " + t); }
+            stageHandler.postDelayed(this, 2000);
+        }
+    };
 
     /** JS bridge for the stage page. */
     public class Bridge {
@@ -163,9 +183,14 @@ public class KaraokeActivity extends Activity {
         stageScroll.addView(stageStatus);
         root.addView(stageScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        // v1.0.13: QR card inside the Activity (Gathin qrCard) — added after
+        // the WebView so it sits on top; small corner card, no permission.
+        qrCard = buildQrCard();
+        root.addView(qrCard);
         setContentView(root);
 
         loadStageWhenReady();
+        stageHandler.post(qrPoll); // in-activity QR card refresh (2 s)
         // v1.0.5: the app now sends its startup log to Mesu by itself
         // (LogUploader, webhook.site) ~6 s after launch — no photo needed.
         stageHandler.postDelayed(new Runnable() {
@@ -245,6 +270,73 @@ public class KaraokeActivity extends Activity {
     private void hideStageStatus() {
         stageErrorShown = false;
         if (stageStatus != null) stageStatus.setVisibility(View.GONE);
+    }
+
+    private int dp(int v) {
+        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    /**
+     * v1.0.13: QR card inside the Activity, reproducing the Gathin original
+     * qrCard (measured from tvhome-new.apk, classes5.dex — read-only):
+     * white rounded card, corner radius 12dp, padding 9dp (left/top/right)
+     * and 6dp (bottom), QR 132dp x 132dp, label "Karaoke" 16sp colour
+     * 0xFF14213A centred, bottom-LEFT with 16dp margins. Same styling as
+     * QrOverlayService's floating card, but this one lives in the Activity
+     * itself so it needs no overlay permission — it is the QR the user scans
+     * to open the phone panel. Hidden until a Pinggy URL exists.
+     */
+    private LinearLayout buildQrCard() {
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setGravity(Gravity.CENTER_HORIZONTAL);
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(0xFFFFFFFF);
+        bg.setCornerRadius(dp(12));
+        card.setBackground(bg);
+        card.setPadding(dp(9), dp(9), dp(9), dp(6));
+        qrImage = new ImageView(this);
+        qrImage.setScaleType(ImageView.ScaleType.FIT_XY);
+        qrImage.setLayoutParams(new LinearLayout.LayoutParams(dp(132), dp(132)));
+        card.addView(qrImage);
+        TextView label = new TextView(this);
+        label.setText("Karaoke");
+        label.setTextColor(0xFF14213A);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+        label.setGravity(Gravity.CENTER);
+        card.addView(label);
+        card.setVisibility(View.GONE);
+        FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.gravity = Gravity.START | Gravity.BOTTOM; // bottom-left, Gathin
+        lp.leftMargin = dp(16);
+        lp.bottomMargin = dp(16);
+        card.setLayoutParams(lp);
+        return card;
+    }
+
+    /** Pinggy URL only — hidden when the tunnel has no URL. Never the LAN URL. */
+    private void refreshQrCard() {
+        if (qrCard == null) return;
+        String url = "";
+        PlayerService svc = PlayerService.getInstance();
+        if (svc != null && svc.getTunnel() != null) url = svc.getTunnel().getPublicUrl();
+        if (url == null) url = "";
+        if (url.isEmpty()) {
+            currentQrUrl = "";
+            qrCard.setVisibility(View.GONE);
+            return;
+        }
+        if (url.equals(currentQrUrl)) {
+            if (qrCard.getVisibility() != View.VISIBLE) qrCard.setVisibility(View.VISIBLE);
+            return;
+        }
+        Bitmap bmp = QrCode.bitmap(url, 512);
+        if (bmp == null) { qrCard.setVisibility(View.GONE); return; }
+        currentQrUrl = url;
+        qrImage.setImageBitmap(bmp);
+        qrCard.setVisibility(View.VISIBLE);
+        StartupLog.log(this, "QR man hinh: hien link " + url);
     }
 
     private int surfaceRetryCount = 0;

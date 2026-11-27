@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.12-pinggy (versionCode 13) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
+**Version:** 1.0.13-pinggy (versionCode 14) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -119,6 +119,21 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   advances exactly like the ended-path (`library.next()` → `playNow()`,
   `player.stop()` if the queue is empty). Any other state (1 playing,
   0 ended, 2 paused) resets the counter — paused never counts as a stall.
+- v1.0.13 (in-activity QR card on the TV screen — fixes the v1.0.11
+  chicken-and-egg): v1.0.11 stripped the stage bare and left the floating
+  system-overlay QR as the ONLY QR, but that QR needs the overlay-permission
+  grant, which needs opening the phone panel, which needs scanning a QR.
+  The original Gathin never had this problem — its QR was a card INSIDE the
+  activity (qrCard), always visible, no permission needed. `KaraokeActivity`
+  now builds that card again (same styling as `QrOverlayService`'s floating
+  card: white, radius 12dp, padding 9dp sides/top + 6dp bottom, QR 132dp,
+  label "Karaoke" 16sp 0xFF14213A, bottom-left, 16dp margins), added to the
+  Activity's root FrameLayout after the WebView so it sits on top; it covers
+  only its own small corner of the video. Pinggy URL only, never the LAN URL;
+  hidden entirely while the tunnel is down/reconnecting; polled every 2 s via
+  `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
+  <url>". The floating `QrOverlayService` is untouched (still the QR over
+  other apps / the home screen).
 - v1.0.9: Pinggy's REAL free URL is `https://<random>.run.pinggy-free.link`
   (and `https://<random>.free.pinggy.net`) — the old regex only matched
   `*.pinggy.link`, so the tunnel sat in "waiting-url" forever and no QR ever
