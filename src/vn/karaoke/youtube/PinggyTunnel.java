@@ -35,7 +35,14 @@ public class PinggyTunnel {
         void onState(String state);
     }
 
-    private static final Pattern URL_RE = Pattern.compile("https://[a-z0-9-]+\\.pinggy\\.link");
+    // Pinggy's REAL free-tier URL formats (measured 2026-11-27 with a live ssh test):
+    //   https://<random>.run.pinggy-free.link
+    //   https://<random>.free.pinggy.net
+    // (NOT https://<random>.pinggy.link as first assumed — that regex matched
+    // nothing, so the tunnel sat in "waiting-url" forever and no QR ever showed.
+    // The dashboard link https://dashboard.pinggy.io must NOT match.)
+    private static final Pattern URL_RE = Pattern.compile(
+            "https://[a-z0-9.-]+\\.(pinggy-free\\.link|free\\.pinggy\\.net|pinggy\\.link)");
     private static final long RECONNECT_BEFORE_MS = 55L * 60 * 1000; // free tier dies ~60 min
     private static final long RETRY_BASE_MS = 10 * 1000;
 
@@ -162,6 +169,9 @@ public class PinggyTunnel {
                 if (in.ready()) {
                     line = in.readLine();
                     if (line == null) break;
+                    // Log every shell line: if Pinggy changes its URL format
+                    // again, the log shows the real lines instead of silence.
+                    StartupLog.log("Pinggy out: " + line);
                     Matcher m = URL_RE.matcher(line);
                     if (m.find()) {
                         publicUrl = m.group();

@@ -1,7 +1,10 @@
 package vn.karaoke.youtube;
 
 import android.content.Context;
+import android.content.Intent;
+import android.net.Uri;
 import android.net.wifi.WifiManager;
+import android.provider.Settings;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.BufferedReader;
@@ -380,8 +383,23 @@ public class RemoteServer {
                 String action = q.get("action");
                 if ("enable".equals(action)) QrOverlayService.setEnabled(ctx, true);
                 else if ("disable".equals(action)) QrOverlayService.setEnabled(ctx, false);
+                else if ("grant".equals(action)) {
+                    // Open the system overlay-permission screen for this app:
+                    // without this grant the floating QR can never appear, and
+                    // there is no in-app prompt for it since v1.0.5.
+                    try {
+                        Intent gi = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:" + ctx.getPackageName()));
+                        gi.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                        ctx.startActivity(gi);
+                        StartupLog.log(ctx, "Mo man hinh cap quyen QR noi");
+                    } catch (Exception e) {
+                        StartupLog.log(ctx, "Mo man hinh cap quyen LOI: " + e);
+                    }
+                }
                 JSONObject o = new JSONObject();
                 o.put("enabled", QrOverlayService.isEnabled(ctx));
+                o.put("canShow", QrOverlayService.canShow(ctx));
                 sendJson(out, o);
                 return;
             }
@@ -505,7 +523,7 @@ public class RemoteServer {
         "<div id='results'></div><h2>Hàng đợi</h2><div id='queue'></div>" +
         "<div class='muted' id='links'></div>" +
         "<div class='row'><span>Pinggy:</span><button onclick=\"pinggy('enable')\">Bật</button><button onclick=\"pinggy('disable')\">Tắt</button><button onclick=\"pinggy('restart')\">Đổi link</button><span class='muted' id='pg'></span></div>" +
-        "<div class='row'><span>QR nổi:</span><button onclick=\"overlay('enable')\">Hiện</button><button onclick=\"overlay('disable')\">Ẩn</button><span class='muted'>QR chỉ hiện link Pinggy, tunnel chết thì tự ẩn</span></div>" +
+        "<div class='row'><span>QR nổi:</span><button onclick=\"overlay('enable')\">Hiện</button><button onclick=\"overlay('disable')\">Ẩn</button><button onclick=\"overlay('grant')\">Cấp quyền</button><span class='muted'>QR chỉ hiện link Pinggy, tunnel chết thì tự ẩn</span></div>" +
         "<img id='qr' style='width:180px;background:#fff;padding:8px' alt='QR'>" +
         "</div>" +
         "<script>" +
