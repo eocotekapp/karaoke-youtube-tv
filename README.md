@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.8-pinggy (versionCode 9) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
+**Version:** 1.0.9-pinggy (versionCode 10) · **APK:** `KaraokeYouTube.apk` — **2,765,274 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -87,6 +87,12 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   service is only started when overlay permission is already granted.
 - v1.0.7 confirmed working on the box: stage loads (`onPageFinished`), no crash.
   The floating QR stays off until overlay permission is granted.
+- v1.0.9: Pinggy's REAL free URL is `https://<random>.run.pinggy-free.link`
+  (and `https://<random>.free.pinggy.net`) — the old regex only matched
+  `*.pinggy.link`, so the tunnel sat in "waiting-url" forever and no QR ever
+  appeared. The stage now has a **"Cấp quyền"** button (`/api/overlay?action=grant`)
+  that opens the system overlay-permission screen, because without that grant
+  the floating QR can never show and there is no in-app prompt for it.
 
 ## Autostart + anti-Doze (chống ngủ đông)
 - `PlayerService` holds a `PARTIAL_WAKE_LOCK` ("karaoke:playback") and a
