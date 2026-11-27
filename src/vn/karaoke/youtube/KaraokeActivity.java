@@ -203,6 +203,7 @@ public class KaraokeActivity extends Activity {
         StartupLog.log(this, "loadStageWhenReady: doi server...");
         stageHandler.post(new Runnable() {
             @Override public void run() {
+                try {
                 PlayerService s = PlayerService.getInstance();
                 RemoteServer srv = s == null ? null : s.getServer();
                 if (srv != null && srv.isRunning()) {
@@ -222,6 +223,10 @@ public class KaraokeActivity extends Activity {
                     return;
                 }
                 stageHandler.postDelayed(this, 300);
+                } catch (Throwable t) {
+                    StartupLog.log(KaraokeActivity.this, "stage poll LOI: " + t);
+                    LogUploader.send(KaraokeActivity.this, "POLL-ERROR");
+                }
             }
         });
     }

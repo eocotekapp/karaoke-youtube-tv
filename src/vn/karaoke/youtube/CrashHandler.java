@@ -58,7 +58,7 @@ public class CrashHandler implements Thread.UncaughtExceptionHandler {
             if (dir == null) dir = ctx.getFilesDir();
             File f = new File(dir, "crash-" + stamp() + ".txt");
             FileOutputStream os = new FileOutputStream(f);
-            String head = "Karaoke YouTube v1.0.5 crash\n"
+            String head = "Karaoke YouTube v1.0.6 crash\n"
                     + "Time: " + new Date().toString() + "\n"
                     + "Device: " + Build.MANUFACTURER + " " + Build.MODEL
                     + " Android " + Build.VERSION.RELEASE + " SDK " + Build.VERSION.SDK_INT
@@ -77,7 +77,9 @@ public class CrashHandler implements Thread.UncaughtExceptionHandler {
             String trace = traceOf(t);
             // Send the log home first (best effort, ~4 s cap) so the crash
             // is diagnosable even if the user never screenshots anything.
-            LogUploader.sendSync(appCtx, "CRASH");
+            // The trace itself is included — without it only the last
+            // milestone is known, not the exception.
+            LogUploader.sendSyncWithTrace(appCtx, "CRASH", thread.getName(), trace);
             File f = writeFile(appCtx, trace);
             Intent i = new Intent(appCtx, CrashActivity.class);
             i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);

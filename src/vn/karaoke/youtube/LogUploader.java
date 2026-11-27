@@ -23,12 +23,21 @@ public class LogUploader {
             "https://webhook.site/#!/view/0f050b91-2325-4fa8-8fa6-4e6be74c9286";
 
     private static String buildBody(Context ctx, String tag) {
-        return "Karaoke " + tag + "\n"
-                + "Device: " + Build.MANUFACTURER + " " + Build.MODEL
-                + " Android " + Build.VERSION.RELEASE + " SDK " + Build.VERSION.SDK_INT
-                + " ABI " + Build.CPU_ABI + "\n"
-                + "Time: " + new Date().toString() + "\n\n"
-                + StartupLog.getText();
+        return buildBody(ctx, tag, null, null);
+    }
+
+    private static String buildBody(Context ctx, String tag, String threadName, String trace) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Karaoke ").append(tag).append("\n")
+                .append("Device: ").append(Build.MANUFACTURER).append(" ").append(Build.MODEL)
+                .append(" Android ").append(Build.VERSION.RELEASE)
+                .append(" SDK ").append(Build.VERSION.SDK_INT)
+                .append(" ABI ").append(Build.CPU_ABI).append("\n")
+                .append("Time: ").append(new Date().toString()).append("\n");
+        if (threadName != null) sb.append("Crash thread: ").append(threadName).append("\n");
+        if (trace != null) sb.append("\n--- STACK TRACE ---\n").append(trace).append("\n");
+        sb.append("\n--- STARTUP LOG ---\n").append(StartupLog.getText());
+        return sb.toString();
     }
 
     private static int post(String body) throws Exception {
@@ -62,9 +71,15 @@ public class LogUploader {
 
     /** Blocking send with a ~4 s cap (crash path: the process is dying anyway). */
     public static void sendSync(final Context ctx, final String tag) {
+        sendSyncWithTrace(ctx, tag, null, null);
+    }
+
+    /** Crash send including the thread name + full stack trace. */
+    public static void sendSyncWithTrace(final Context ctx, final String tag,
+                                         final String threadName, final String trace) {
         Thread t = new Thread(new Runnable() {
             @Override public void run() {
-                try { post(buildBody(ctx, tag)); } catch (Exception ignored) { }
+                try { post(buildBody(ctx, tag, threadName, trace)); } catch (Exception ignored) { }
             }
         }, "log-upload-sync");
         t.setDaemon(true);

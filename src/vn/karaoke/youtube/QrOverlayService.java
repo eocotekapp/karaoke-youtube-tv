@@ -259,7 +259,9 @@ public class QrOverlayService extends Service {
 
     private final Runnable tick = new Runnable() {
         @Override public void run() {
-            tickOnce();
+            // A tick must never kill the app: any failure here only stops
+            // the QR refresh, it is never worth a crash.
+            try { tickOnce(); } catch (Throwable t) { StartupLog.log(QrOverlayService.this, "QR tick LOI: " + t); }
             if (handler != null) handler.postDelayed(this, POLL_MS);
         }
     };
