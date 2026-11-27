@@ -67,7 +67,7 @@ public class KaraokeActivity extends Activity {
     @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         StartupLog.log(this, "Activity onCreate");
-        try { startPlayerService(); StartupLog.log(this, "startPlayerService() goi xong"); }
+        try { startPlayerService(); StartupLog.log(this, "startPlayerService() goi xong"); attachSurface(); }
         catch (Exception e) { StartupLog.log(this, "startPlayerService LOI: " + e); CrashHandler.log(this, e); }
 
         FrameLayout root = new FrameLayout(this);
@@ -247,10 +247,23 @@ public class KaraokeActivity extends Activity {
         if (stageStatus != null) stageStatus.setVisibility(View.GONE);
     }
 
+    private int surfaceRetryCount = 0;
+
     private void attachSurface() {
         PlayerService s = PlayerService.getInstance();
         if (s != null && surfaceView != null && surfaceView.getHolder().getSurface() != null) {
             s.getPlayer().ensureSurface(surfaceView.getHolder().getSurface());
+            surfaceRetryCount = 0;
+            StartupLog.log(this, "Surface gan xong");
+            return;
+        }
+        // Service may not exist yet when the surface is created (slow box):
+        // retry every 500 ms up to ~10 s so the video is never left unattached.
+        if (surfaceRetryCount < 20) {
+            surfaceRetryCount++;
+            stageHandler.postDelayed(new Runnable() {
+                @Override public void run() { attachSurface(); }
+            }, 500);
         }
     }
 

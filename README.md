@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.9-pinggy (versionCode 10) · **APK:** `KaraokeYouTube.apk` — **2,765,274 bytes**
+**Version:** 1.0.10-pinggy (versionCode 11) · **APK:** `KaraokeYouTube.apk`
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -87,6 +87,15 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   service is only started when overlay permission is already granted.
 - v1.0.7 confirmed working on the box: stage loads (`onPageFinished`), no crash.
   The floating QR stays off until overlay permission is granted.
+- v1.0.10 (video fix): v1.0.9 played audio but no video — the stage page painted
+  an opaque `#09090d` body background over the SurfaceView, and a dead empty
+  `<video>` element sat on top of it. Fix: stage adds `html,body{background:transparent}`
+  after COMMON_CSS (phone panel keeps its opaque background), the dead
+  `<div id='videoZone'>` + `<video id='p'>` + unused `loadVideo()` are removed
+  (video comes from ExoPlayer on the SurfaceView only), `attachSurface()` now
+  retries every 500 ms up to ~10 s when the service isn't up yet, and
+  `onVideoSizeChanged` logs `Video: <w>x<h>` so the webhook log proves a video
+  track exists.
 - v1.0.9: Pinggy's REAL free URL is `https://<random>.run.pinggy-free.link`
   (and `https://<random>.free.pinggy.net`) — the old regex only matched
   `*.pinggy.link`, so the tunnel sat in "waiting-url" forever and no QR ever

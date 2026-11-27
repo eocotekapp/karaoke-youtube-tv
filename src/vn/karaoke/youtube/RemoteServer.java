@@ -509,11 +509,9 @@ public class RemoteServer {
     private static final String STAGE_HTML =
         "<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>" +
         "<title>Karaoke YouTube</title><style>" + COMMON_CSS +
-        "#videoZone{position:fixed;inset:0;background:transparent;pointer-events:none}" +
+        "html,body{background:transparent}" +
         "#panel{position:fixed;left:0;right:0;bottom:0;background:rgba(9,9,13,.88);padding:14px;max-height:55vh;overflow:auto}" +
-        "#topbar{position:fixed;top:0;left:0;right:0;padding:10px 16px;background:rgba(9,9,13,.75);display:flex;gap:14px;align-items:center}" +
-        "video{width:100%;height:100%;object-fit:contain}</style></head><body>" +
-        "<div id='videoZone'><video id='p' playsinline></video></div>" +
+        "#topbar{position:fixed;top:0;left:0;right:0;padding:10px 16px;background:rgba(9,9,13,.75);display:flex;gap:14px;align-items:center}</style></head><body>" +
         "<div id='topbar'><b style='font-size:28px'>🎵 Karaoke YouTube</b><span class='muted' id='now'>Chưa phát bài nào</span>" +
         "<span style='flex:1'></span><span class='muted' id='net'>LAN…</span></div>" +
         "<div id='panel'><div class='row'><input id='q' placeholder='Tìm bài hát…' onkeydown='if(event.key===\"Enter\")search()'>" +
@@ -549,13 +547,6 @@ public class RemoteServer {
         "function watchStall(){if(stallTimer)clearTimeout(stallTimer);" +
         "stallTimer=setTimeout(function(){try{var st=PX.getState();var code=parseInt(st.split(',')[0]);" +
         "if(code===-1||code===3){ctl('next');}}catch(e){}},1000);}" +
-        "async function loadVideo(id){try{var r=await api('/api/resolve?id='+id);" +
-        "var cands=r.candidates||[];var v=document.getElementById('p');" +
-        "for(var i=0;i<cands.length;i++){var u=cands[i].url;" +
-        "if(cands[i].kind==='hls'||u.indexOf('.m3u8')>=0){u='/stream?u='+encodeURIComponent(u);}" +
-        "else if(u.indexOf('googlevideo.com')>=0){u='/stream?u='+encodeURIComponent(u);}" +
-        "v.src=u;try{await v.play();return;}catch(e){}}" +
-        "}catch(e){}}" +
         "if(window.KB){try{KB.onReady();}catch(e){}}" +
         "refresh();setInterval(refresh,5000);setInterval(watchStall,5000);" +
         "</script></body></html>";

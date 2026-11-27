@@ -14,6 +14,7 @@ import com.google.android.exoplayer2.source.dash.DashMediaSource;
 import com.google.android.exoplayer2.source.hls.HlsMediaSource;
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.google.android.exoplayer2.upstream.HttpDataSource;
+import com.google.android.exoplayer2.video.VideoSize;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -54,6 +55,9 @@ public class MesuPlayer {
             }
             @Override public void onIsPlayingChanged(boolean isPlaying) {
                 lastState = isPlaying ? 1 : (player != null && player.getPlaybackState() == Player.STATE_READY ? 2 : lastState);
+            }
+            @Override public void onVideoSizeChanged(VideoSize videoSize) {
+                StartupLog.log("Video: " + videoSize.width + "x" + videoSize.height);
             }
             @Override public void onPlayerError(PlaybackException error) {
                 lastState = -1;
