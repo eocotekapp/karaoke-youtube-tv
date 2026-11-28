@@ -10,30 +10,49 @@ import java.util.List;
 /** Queue + local playlists, persisted in SharedPreferences. Clean rewrite. */
 public class LibraryState {
     public static class Item {
-        public String id, title, channel;
+        public String id, title, channel, thumb;
         public long durationMs;
         public Item(String id, String title, String channel, long durationMs) {
-            this.id = id; this.title = title; this.channel = channel; this.durationMs = durationMs;
+            this(id, title, channel, durationMs, null);
         }
+        public Item(String id, String title, String channel, long durationMs, String thumb) {
+            this.id = id; this.title = title; this.channel = channel; this.durationMs = durationMs; this.thumb = thumb;
+        }
+        /** v1.0.29: the real Gathin panel reads artist/thumb/duration (seconds)
+         * from every item (current, queue, playlist, search) — expose them as
+         * aliases alongside the existing id/title/channel/durationMs fields. */
         public JSONObject toJson() {
             try {
                 JSONObject o = new JSONObject();
                 o.put("id", id); o.put("title", title == null ? "" : title);
                 o.put("channel", channel == null ? "" : channel);
+                o.put("artist", channel == null ? "" : channel);
+                o.put("thumb", (thumb == null || thumb.isEmpty())
+                        ? ("https://i.ytimg.com/vi/" + id + "/mqdefault.jpg") : thumb);
                 o.put("durationMs", durationMs);
+                o.put("duration", durationMs / 1000);
                 return o;
             } catch (Exception e) { return new JSONObject(); }
         }
         public static Item fromJson(JSONObject o) {
             return new Item(o.optString("id"), o.optString("title"),
-                    o.optString("channel"), o.optLong("durationMs"));
+                    o.optString("channel"), o.optLong("durationMs"),
+                    o.has("thumb") ? o.optString("thumb") : null);
         }
     }
 
+    /** v1.0.29: playlists now carry a stable id (the real Gathin panel
+     * addresses playlists by pl.id, never by name). The id is generated
+     * once on creation and persisted with the playlist; playlists saved
+     * by older builds (name only) get an id assigned on load (see load()). */
     public static class Playlist {
-        public String name;
+        public String id, name;
         public List<Item> items = new ArrayList<>();
-        public Playlist(String name) { this.name = name; }
+        public Playlist(String name) { this(java.util.UUID.randomUUID().toString(), name); }
+        public Playlist(String id, String name) {
+            this.id = (id == null || id.isEmpty()) ? java.util.UUID.randomUUID().toString() : id;
+            this.name = name;
+        }
     }
 
     private static final String PREFS = "karaoke_library";
@@ -54,14 +73,17 @@ public class LibraryState {
             for (int i = 0; i < q.length(); i++) queue.add(Item.fromJson(q.getJSONObject(i)));
             currentIndex = prefs.getInt("currentIndex", queue.isEmpty() ? -1 : 0);
             JSONArray ps = new JSONArray(prefs.getString("playlists", "[]"));
+            boolean migrated = false;
             for (int i = 0; i < ps.length(); i++) {
                 JSONObject p = ps.getJSONObject(i);
-                Playlist pl = new Playlist(p.optString("name"));
+                Playlist pl = new Playlist(p.optString("id"), p.optString("name"));
+                if (!p.has("id") || p.optString("id").isEmpty()) migrated = true;
                 JSONArray items = p.optJSONArray("items");
                 if (items != null) for (int j = 0; j < items.length(); j++)
                     pl.items.add(Item.fromJson(items.getJSONObject(j)));
                 playlists.add(pl);
             }
+            if (migrated) persist(); // v1.0.29: old name-only playlists get a stable id, saved at once
             JSONArray h = new JSONArray(prefs.getString("searchHistory", "[]"));
             for (int i = 0; i < h.length(); i++) searchHistory.add(h.optString(i));
         } catch (Exception ignored) { }
@@ -74,6 +96,7 @@ public class LibraryState {
             JSONArray ps = new JSONArray();
             for (Playlist pl : playlists) {
                 JSONObject p = new JSONObject();
+                p.put("id", pl.id);
                 p.put("name", pl.name);
                 JSONArray items = new JSONArray();
                 for (Item it : pl.items) items.put(it.toJson());
@@ -146,6 +169,32 @@ public class LibraryState {
             if (playlists.get(i).name.equals(name)) { playlists.remove(i); break; }
         persist();
     }
+    /** v1.0.29: playlist lookup by the stable id the Gathin panel uses. */
+    public synchronized Playlist findPlaylistById(String id) {
+        if (id == null) return null;
+        for (Playlist p : playlists) if (id.equals(p.id)) return p;
+        return null;
+    }
+    public synchronized Playlist findPlaylistByName(String name) {
+        if (name == null) return null;
+        for (Playlist p : playlists) if (name.equals(p.name)) return p;
+        return null;
+    }
+    public synchronized void deletePlaylistById(String id) {
+        for (int i = 0; i < playlists.size(); i++)
+            if (playlists.get(i).id.equals(id)) { playlists.remove(i); break; }
+        persist();
+    }
+    /** v1.0.29: add an item to a playlist, skipping duplicates by video id.
+     * Returns true only when the item was actually added (the panel toasts
+     * "Bài đã có trong..." when it gets added==0). */
+    public synchronized boolean playlistAdd(Playlist pl, Item it) {
+        if (pl == null || it == null || it.id == null) return false;
+        for (Item x : pl.items) if (it.id.equals(x.id)) return false;
+        pl.items.add(it);
+        persist();
+        return true;
+    }
     public synchronized void recordSearch(String q) {
         if (q == null || q.isEmpty()) return;
         searchHistory.remove(q);
@@ -164,6 +213,7 @@ public class LibraryState {
             JSONArray ps = new JSONArray();
             for (Playlist pl : playlists) {
                 JSONObject p = new JSONObject();
+                p.put("id", pl.id);
                 p.put("name", pl.name);
                 JSONArray items = new JSONArray();
                 for (Item it : pl.items) items.put(it.toJson());

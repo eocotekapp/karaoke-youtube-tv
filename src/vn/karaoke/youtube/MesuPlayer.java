@@ -33,6 +33,10 @@ public class MesuPlayer {
     private String currentTitle = "";
     private volatile int lastState = -1;
     private volatile String lastError = "";
+    /** v1.0.29: ExoPlayer keeps no readable volume — remember the last
+     * setVolume() so /api/state can report volume 0-100 (the Gathin
+     * panel's slider reads s.volume on every refresh). */
+    private volatile float lastVolume = 1.0f;
 
     public MesuPlayer(Context ctx) { this.ctx = ctx.getApplicationContext(); }
 
@@ -162,7 +166,12 @@ public class MesuPlayer {
         if (player != null) { player.stop(); player.clearMediaItems(); }
         lastState = -1;
     }
-    public synchronized void setVolume(float v) { if (player != null) player.setVolume(v); }
+    public synchronized void setVolume(float v) {
+        lastVolume = v < 0f ? 0f : (v > 1f ? 1f : v);
+        if (player != null) player.setVolume(lastVolume);
+    }
+    /** Volume 0-100 for /api/state (the Gathin panel slider). */
+    public int getVolumePercent() { return Math.round(lastVolume * 100f); }
     public synchronized void seekTo(long ms) { if (player != null) player.seekTo(ms); }
     public synchronized void release() {
         if (player != null) { player.release(); player = null; }

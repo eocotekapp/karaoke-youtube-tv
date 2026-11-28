@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.28-pinggy (versionCode 29) · **APK:** `KaraokeYouTube.apk` — **2,777,630 bytes**
+**Version:** 1.0.29-pinggy (versionCode 30) · **APK:** `KaraokeYouTube.apk` — **2,785,824 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -287,6 +287,43 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   unchanged. Rationale: 64dp = 128 physical px on this 320dpi box, ~2.8px
   per module for the v5 panel URL — still scannable from the couch, and
   half the Gathin original's 132dp.
+- v1.0.29 (REAL GATHIN PANEL, 2026-11-28 — user: "Giao diện như vậy mày bảo
+  giống gathintv mày có thật sự xem code code gathintv không thế"): the phone
+  panel is now the REAL Gathin TV panel, ported verbatim from the original
+  Gathin tvhome APK (`classes3.dex` string constant,
+  `gathin-panel-original.html`) — same dark UI (#0c0c12, accent #ff3b57),
+  now-playing card with scrolling marquee title, round play/prev/next
+  buttons, volume slider, sleep-timer chips, sticky tabs (Tìm bài / Hàng
+  chờ / Playlist), Bài hát-Kênh toggle, voice-search mic button, paste-link
+  row, drag-to-reorder queue, swipe-right delete / swipe-left add-to-playlist,
+  bottom-sheet playlist picker, toasts. Server compat layer added in
+  `RemoteServer` so the original panel's calls work: POST form bodies were
+  already merged into the params map (verified in `handle()`); `stateJson()`
+  now also emits `playing`/`position`/`duration` (seconds, parsed from the
+  "st,pos,dur,..." state string), `volume` (0-100, tracked in `MesuPlayer`
+  — ExoPlayer has no volume getter), `sleepLeft` (alias of
+  `sleepMinutesLeft`) and `index` (alias of `currentIndex`); items now
+  carry `artist`/`thumb`/`duration` (seconds) aliases in both
+  `LibraryState.Item` and `YoutubeApi.Video` toJson; `/api/search` returns
+  `ok:true` and pages server-side, 20 per page (the panel stops only when a
+  page returns < 20 — without paging the same results would loop forever),
+  `type=channel` returns empty results; `/api/channel` returns `ok:false`
+  (panel shows "Không lấy được video của kênh."); playlists carry a stable
+  persisted `id` + `count` (old name-only playlists get an id on load);
+  `/api/playlist`, `/api/playlist-add/remove/enqueue/play/delete` resolve by
+  `playlist=<id>` (name param still works), `playlist-add` counts only
+  actually-added items (0 = duplicate) and handles `playlist=new`;
+  `/api/control` volume accepts `value` as well as `v`; `/api/paste`
+  accepts mode `now` and returns `{ok, item}`. Two deliberate adaptations
+  to the original HTML: (1) a `window.fetch` shim (Pinggy Caution handshake
+  + one retry on JSON-parse failure — the v1.0.19 mechanism) wrapping every
+  panel call; (2) a small "Hệ thống" footer card (self-update row + Bật/Tắt
+  toggle, QR overlay Hiện/Ẩn, Pinggy restart) — the Gathin panel has none.
+  HONEST NOTE: the extracted original was TRUNCATED mid-script (ends
+  "...if(s&&s.ok){toa", no `</script></html>`, no delete-playlist handler,
+  no `refresh()` init) — the tail was reconstructed in the original's style
+  and 6 U+FFFD extraction-artifact chars in the paste toast were removed.
+  Channel search/view stays cut in v1 (UI-only, empty results).
 - v1.0.28 (TOKEN SWAP ONLY, 2026-11-28): the webhook.site log token
   136db121… died ~11:38 (HTTP 429 "Request limit exceeded" — the free
   token's 50-stored-request cap, confirmed by a test POST), so the app's

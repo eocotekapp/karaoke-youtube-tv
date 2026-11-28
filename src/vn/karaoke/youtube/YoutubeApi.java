@@ -44,8 +44,12 @@ public class YoutubeApi {
                 JSONObject o = new JSONObject();
                 o.put("id", id); o.put("title", title == null ? "" : title);
                 o.put("channel", channel == null ? "" : channel);
+                // v1.0.29: the real Gathin panel reads artist + duration
+                // (seconds) from search results, like it does from queue items.
+                o.put("artist", channel == null ? "" : channel);
                 o.put("thumb", thumb == null ? ("https://i.ytimg.com/vi/" + id + "/hqdefault.jpg") : thumb);
                 o.put("durationMs", durationMs);
+                o.put("duration", durationMs / 1000);
                 o.put("durationText", durationText == null ? "" : durationText);
                 return o;
             } catch (Exception e) { return new JSONObject(); }
