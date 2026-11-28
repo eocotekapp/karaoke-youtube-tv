@@ -17,6 +17,10 @@ import java.util.List;
  * Primary: youtubei/v1/search + /player, client ANDROID.
  * Resolve: VISIONOS HLS first (v1.0.31, the original Gathin mechanism),
  * then Invidious HLS, then progressive itag 18 last.
+ * v1.0.36: when the user is signed in (own session cookies — see
+ * YouTubeAuth), a signed-in WEB player attempt runs FIRST (TVHTML5
+ * second); its usable candidates go in front of the ladder below,
+ * and a failure there changes nothing.
  * Fallbacks: oEmbed + Invidious-compatible instances.
  * Clean rewrite from the behaviour spec.
  */
@@ -32,6 +36,19 @@ public class YoutubeApi {
      * with Android/11). */
     public static final String VISIONOS_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
     private static final String VISIONOS_CLIENT_VERSION = "1.02";
+    /** v1.0.36: signed-in InnerTube (own session cookies — see
+     * YouTubeAuth). WEB first (yt-dlp's cookie default), TVHTML5 second.
+     * WEB version 2.20260708.00.00 is the one yt-dlp pinned at
+     * 2026-09-16 (c7fb478d — corroborated by glimpse F3InnerTube.md and
+     * invio-core's client table, both read 2026-11-28); TVHTML5
+     * 7.20260114.12.00 / downgraded 5.20260114 per MeeTube §6. The WEB
+     * attempt uses the Safari UA (same string as VISIONOS_UA): with a
+     * Safari UA the WEB client returns a pre-merged hlsManifestUrl
+     * (MeeTube §4) — directly playable, no deciphering. Stale versions
+     * can soft-block; the v1.0.35 ladder below is the fallback, so a
+     * stale version can never fail a song. */
+    private static final String WEB_CLIENT_VERSION = "2.20260708.00.00";
+    private static final String TVHTML5_CLIENT_VERSION = "7.20260114.12.00";
     private static final String[] INVIDIOUS = {
         "https://invidious.ducks.party",
         "https://invidious.materialio.us",
@@ -62,6 +79,19 @@ public class YoutubeApi {
                 o.put("durationMs", durationMs);
                 o.put("duration", durationMs / 1000);
                 o.put("durationText", durationText == null ? "" : durationText);
+                return o;
+            } catch (Exception e) { return new JSONObject(); }
+        }
+    }
+
+    /** v1.0.36: a subscribed channel (panel "Kênh đăng ký"). */
+    public static class Channel {
+        public String id, title, thumb;
+        public JSONObject toJson() {
+            try {
+                JSONObject o = new JSONObject();
+                o.put("id", id); o.put("title", title == null ? "" : title);
+                o.put("thumb", thumb == null ? "" : thumb);
                 return o;
             } catch (Exception e) { return new JSONObject(); }
         }
@@ -246,6 +276,292 @@ public class YoutubeApi {
         return null;
     }
 
+    // ================= v1.0.36: signed-in InnerTube (own cookies) =================
+
+    /** POST to youtubei/v1/<endpoint> as a signed-in WEB/TVHTML5 client:
+     * Cookie + SAPISIDHASH + Origin from YouTubeAuth (the user's own
+     * session). Throws "HTTP <code>" on HTTP errors — the caller logs
+     * it and falls through to the next client / the anonymous ladder. */
+    private String fetchSignedIn(String endpoint, JSONObject body, String clientName, String clientVersion) throws Exception {
+        URL url = new URL("https://www.youtube.com/youtubei/v1/" + endpoint + "?prettyPrint=false");
+        HttpURLConnection c = (HttpURLConnection) url.openConnection();
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(20000);
+        c.setRequestProperty("User-Agent", VISIONOS_UA); // Safari UA: WEB returns pre-merged HLS with it (MeeTube §4)
+        c.setRequestProperty("Content-Type", "application/json");
+        c.setRequestProperty("X-YouTube-Client-Name", clientName);
+        c.setRequestProperty("X-YouTube-Client-Version", clientVersion);
+        c.setRequestProperty("Origin", "https://www.youtube.com");
+        if (!visitorData.isEmpty()) c.setRequestProperty("X-Goog-Visitor-Id", visitorData);
+        YouTubeAuth.getInstance().applyAuthHeaders(c);
+        c.setRequestMethod("POST");
+        c.setDoOutput(true);
+        byte[] b = body.toString().getBytes("UTF-8");
+        c.setFixedLengthStreamingMode(b.length);
+        OutputStream os = c.getOutputStream();
+        os.write(b); os.flush(); os.close();
+        int code = c.getResponseCode();
+        InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+        if (in == null) throw new Exception("HTTP " + code);
+        BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = r.readLine()) != null) sb.append(line).append('\n');
+        r.close();
+        if (code >= 400) throw new Exception("HTTP " + code);
+        return sb.toString();
+    }
+
+    private static JSONObject signedInPlayerBody(String videoId, String clientName, String clientVersion, String visitor) throws Exception {
+        JSONObject client = new JSONObject();
+        client.put("clientName", clientName);
+        client.put("clientVersion", clientVersion);
+        client.put("hl", "vi");
+        client.put("gl", "VN");
+        client.put("userAgent", VISIONOS_UA);
+        if (visitor != null && !visitor.isEmpty()) client.put("visitorData", visitor);
+        JSONObject ctx = new JSONObject();
+        ctx.put("client", client);
+        JSONObject body = new JSONObject();
+        body.put("context", ctx);
+        body.put("videoId", videoId);
+        body.put("contentCheckOk", true);
+        body.put("racyCheckOk", true);
+        body.put("playbackContext", new JSONObject().put("contentPlaybackContext",
+                new JSONObject().put("html5Preference", "HTML5_PREF_WANTS")));
+        return body;
+    }
+
+    /** What a signed-in player response carries. Adaptive plain-url
+     * formats are counted for the probe but NOT offered as candidates:
+     * a video-only adaptive stream is useless alone (no audio) — only
+     * a progressive mux or an HLS manifest plays. */
+    private static class SignedInResult {
+        JSONArray candidates = new JSONArray();
+        boolean sabrOnly = false;
+        boolean hasAds = false;
+        boolean hasHls = false;
+        int plainFormats = 0;
+        String playability = "";
+    }
+
+    private static SignedInResult analyzeSignedInPlayer(JSONObject r) {
+        SignedInResult out = new SignedInResult();
+        if (r == null) return out;
+        JSONObject ps = r.optJSONObject("playabilityStatus");
+        if (ps != null) out.playability = ps.optString("status", "");
+        // Ads: any of these present means the account is being served ads
+        // (Premium accounts get none). Instrument only — never gates.
+        out.hasAds = r.has("playerAds") || r.has("adPlacements") || r.has("adSlots");
+        JSONObject sd = r.optJSONObject("streamingData");
+        if (sd == null) return out;
+        String hls = sd.optString("hlsManifestUrl", null);
+        if (hls != null && !hls.isEmpty()) {
+            out.hasHls = true;
+            try {
+                JSONObject c = new JSONObject();
+                c.put("url", hls); c.put("kind", "hls");
+                out.candidates.put(c);
+            } catch (Exception ignored) { }
+        }
+        boolean hasSabr = sd.has("serverAbrStreamingUrl");
+        JSONArray af = sd.optJSONArray("adaptiveFormats");
+        if (af != null) {
+            for (int i = 0; i < af.length(); i++) {
+                JSONObject f = af.optJSONObject(i);
+                if (f == null || !f.has("url")) continue; // ciphered — unusable, no deciphering
+                out.plainFormats++;
+            }
+        }
+        JSONArray fmts = sd.optJSONArray("formats");
+        if (fmts != null) {
+            for (int i = 0; i < fmts.length(); i++) {
+                JSONObject f = fmts.optJSONObject(i);
+                if (f == null || !f.has("url")) continue;
+                try {
+                    JSONObject c = new JSONObject();
+                    c.put("url", f.optString("url"));
+                    c.put("kind", "progressive");
+                    c.put("itag", f.optInt("itag"));
+                    out.candidates.put(c);
+                } catch (Exception ignored) { }
+            }
+        }
+        out.sabrOnly = hasSabr && !out.hasHls && out.candidates.length() == 0;
+        return out;
+    }
+
+    /**
+     * v1.0.36: signed-in player attempt (WEB first, TVHTML5 second).
+     * Returns usable candidates (hlsManifestUrl or plain-url progressive)
+     * tagged "signed-in-web"/"signed-in-tv", or null when the signed-in
+     * path yields nothing usable (HTTP error / LOGIN_REQUIRED / SABR-only
+     * / DRM / no streams). NEVER throws — any failure just means the
+     * caller falls through to the v1.0.35 ladder unchanged. Also records
+     * the Premium probe (one log line per video, instrument only).
+     */
+    public JSONArray resolveSignedIn(String videoId) {
+        YouTubeAuth auth = YouTubeAuth.getInstance();
+        if (!auth.isSignedIn()) return null;
+        String[][] clients = {{"WEB", "1", WEB_CLIENT_VERSION}, {"TVHTML5", "7", TVHTML5_CLIENT_VERSION}};
+        for (String[] cl : clients) {
+            String name = cl[0], num = cl[1], ver = cl[2];
+            try {
+                JSONObject body = signedInPlayerBody(videoId, name, ver, visitorData.isEmpty() ? null : visitorData);
+                String s = fetchSignedIn("player", body, num, ver);
+                JSONObject r = new JSONObject(s);
+                updateVisitorData(r);
+                SignedInResult res = analyzeSignedInPlayer(r);
+                // Premium probe: signed in + no ads + usable streams =>
+                // "co the la Premium". There is no official Premium flag;
+                // absence of adPlacements/playerAds is the observable
+                // signal (research §2). Never gates playback.
+                boolean likely = !res.hasAds && (res.hasHls || res.candidates.length() > 0);
+                String probe = "Premium probe: " + videoId + " signed-in " + name.toLowerCase()
+                        + " ads=" + (res.hasAds ? "co" : "khong")
+                        + " hls=" + (res.hasHls ? "co" : "khong")
+                        + " sabr-only=" + (res.sabrOnly ? "co" : "khong")
+                        + " plainFormats=" + res.plainFormats
+                        + " playability=" + res.playability
+                        + " => premium " + (likely ? "CO THE" : "chua thay dau hieu");
+                StartupLog.log(probe);
+                auth.setProbe(videoId, likely, probe);
+                if (res.candidates.length() > 0) {
+                    for (int i = 0; i < res.candidates.length(); i++) {
+                        JSONObject c = res.candidates.optJSONObject(i);
+                        if (c != null) c.put("source", "signed-in-" + name.toLowerCase());
+                    }
+                    StartupLog.log("Phat " + videoId + ": signed-in " + name.toLowerCase()
+                            + " OK (" + res.candidates.length() + " ung vien)");
+                    return res.candidates;
+                }
+                StartupLog.log("Phat " + videoId + ": signed-in " + name.toLowerCase()
+                        + " khong co stream dung duoc (sabr-only=" + res.sabrOnly
+                        + ", playability=" + res.playability + ")");
+            } catch (Exception e) {
+                // HTTP 400/401/403 (stale client version, bad/expired
+                // session, SABR/DRM enforcement) — logged, then the next
+                // client, then the anonymous ladder. Never fails the song.
+                String m = e.getMessage();
+                if (m != null && m.length() > 200) m = m.substring(0, 200);
+                StartupLog.log("Phat " + videoId + ": signed-in " + name.toLowerCase() + " LOI: " + m);
+            }
+        }
+        return null;
+    }
+
+    /** Collect every JSONObject stored under `key` anywhere in the tree
+     * (browse responses nest videoRenderer/channelRenderer at varying
+     * depths: sectionListRenderer / itemSectionRenderer / gridRenderer /
+     * shelfRenderer...). A matched object is NOT recursed into, so a
+     * nested renderer of the same kind is never double-counted. */
+    private static void collectRenderers(Object node, String key, JSONArray out) {
+        if (node instanceof JSONObject) {
+            JSONObject o = (JSONObject) node;
+            java.util.Iterator<String> it = o.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                Object v = o.opt(k);
+                if (k.equals(key) && v instanceof JSONObject) out.put(v);
+                else collectRenderers(v, key, out);
+            }
+        } else if (node instanceof JSONArray) {
+            JSONArray a = (JSONArray) node;
+            for (int i = 0; i < a.length(); i++) collectRenderers(a.opt(i), key, out);
+        }
+    }
+
+    private static Video videoFromRenderer(JSONObject vr) {
+        if (vr == null) return null;
+        Video v = new Video();
+        v.id = vr.optString("videoId");
+        if (v.id == null || v.id.isEmpty()) return null;
+        v.title = runsText(vr.optJSONObject("title"));
+        v.channel = runsText(vr.optJSONObject("longBylineText"));
+        if (v.channel.isEmpty()) v.channel = runsText(vr.optJSONObject("ownerText"));
+        v.durationText = runsText(vr.optJSONObject("lengthText"));
+        v.durationMs = parseDuration(v.durationText);
+        v.thumb = bestThumb(vr.optJSONObject("thumbnail"));
+        return v;
+    }
+
+    /** v1.0.36: signed-in browse (WEB client + own cookies). Throws when
+     * signed out or on HTTP errors — the caller answers ok:false. */
+    public JSONObject browseSignedIn(String browseId, String params) throws Exception {
+        if (!YouTubeAuth.getInstance().isSignedIn()) throw new Exception("chua dang nhap YouTube");
+        JSONObject client = new JSONObject();
+        client.put("clientName", "WEB");
+        client.put("clientVersion", WEB_CLIENT_VERSION);
+        client.put("hl", "vi");
+        client.put("gl", "VN");
+        client.put("userAgent", VISIONOS_UA);
+        if (!visitorData.isEmpty()) client.put("visitorData", visitorData);
+        JSONObject ctx = new JSONObject();
+        ctx.put("client", client);
+        JSONObject body = new JSONObject();
+        body.put("context", ctx);
+        body.put("browseId", browseId);
+        if (params != null && !params.isEmpty()) body.put("params", params);
+        JSONObject r = new JSONObject(fetchSignedIn("browse", body, "1", WEB_CLIENT_VERSION));
+        updateVisitorData(r);
+        return r;
+    }
+
+    /** v1.0.36: the user's subscribed channels (FEsubscriptions). */
+    public List<Channel> browseSubscriptions() throws Exception {
+        JSONObject r = browseSignedIn("FEsubscriptions", null);
+        JSONArray found = new JSONArray();
+        collectRenderers(r, "channelRenderer", found);
+        List<Channel> out = new ArrayList<>();
+        for (int i = 0; i < found.length(); i++) {
+            JSONObject cr = found.optJSONObject(i);
+            if (cr == null) continue;
+            Channel ch = new Channel();
+            ch.id = cr.optString("channelId");
+            ch.title = runsText(cr.optJSONObject("title"));
+            ch.thumb = bestThumb(cr.optJSONObject("thumbnail"));
+            if (ch.id != null && !ch.id.isEmpty()) out.add(ch);
+        }
+        StartupLog.log("Kenh dang ky: " + out.size() + " kenh");
+        return out;
+    }
+
+    /** v1.0.36: videos of one subscribed channel (videos tab). */
+    public List<Video> browseChannelVideos(String channelId) throws Exception {
+        JSONObject r = browseSignedIn(channelId, "EgZ2aWRlb3M%3D");
+        JSONArray found = new JSONArray();
+        collectRenderers(r, "videoRenderer", found);
+        List<Video> out = new ArrayList<>();
+        for (int i = 0; i < found.length(); i++) {
+            Video v = videoFromRenderer(found.optJSONObject(i));
+            if (v != null) out.add(v);
+        }
+        StartupLog.log("Video cua kenh " + channelId + ": " + out.size() + " video");
+        return out;
+    }
+
+    /** v1.0.36: the user's watch history (FEhistory). */
+    public List<Video> browseHistory() throws Exception {
+        JSONObject r = browseSignedIn("FEhistory", null);
+        JSONArray found = new JSONArray();
+        collectRenderers(r, "videoRenderer", found);
+        List<Video> out = new ArrayList<>();
+        for (int i = 0; i < found.length(); i++) {
+            Video v = videoFromRenderer(found.optJSONObject(i));
+            if (v != null) out.add(v);
+        }
+        StartupLog.log("Lich su xem: " + out.size() + " video");
+        return out;
+    }
+
+    /** Prepend list A in front of list B (new JSONArray). */
+    private static JSONArray prepend(JSONArray a, JSONArray b) {
+        JSONArray out = new JSONArray();
+        if (a != null) for (int i = 0; i < a.length(); i++) out.put(a.optJSONObject(i));
+        if (b != null) for (int i = 0; i < b.length(); i++) out.put(b.optJSONObject(i));
+        return out;
+    }
+
     private JSONObject clientContext() throws Exception {
         JSONObject client = new JSONObject();
         client.put("clientName", "ANDROID");
@@ -388,6 +704,14 @@ public class YoutubeApi {
         if (cached != null) return new JSONObject(cached);
         JSONObject result = new JSONObject();
         result.put("id", videoId);
+        // v1.0.36: signed-in attempt FIRST (own session cookies — see
+        // YouTubeAuth). Its candidates go in FRONT of the anonymous
+        // ladder below; a failure here changes nothing — the ladder runs
+        // exactly as in v1.0.35, and a signed-in candidate that fails at
+        // playback still falls through to visionos/invidious at runtime
+        // (v1.0.35 candidate fallback). NEVER fails a song because
+        // sign-in exists.
+        JSONArray signedCands = resolveSignedIn(videoId);
         try {
             JSONObject body = clientContext();
             body.put("videoId", videoId);
@@ -472,6 +796,11 @@ public class YoutubeApi {
                 for (int i = 0; i < cands.length(); i++) merged.put(cands.optJSONObject(i));
                 if (merged.length() > 0) { cands = merged; result.put("candidates", cands); }
             }
+            // v1.0.36: signed-in candidates first, anonymous ladder after.
+            if (signedCands != null && signedCands.length() > 0) {
+                cands = prepend(signedCands, cands);
+                result.put("candidates", cands);
+            }
         } catch (Exception e) {
             // ANDROID player call failed (network/cooling) — the VISIONOS
             // dance is a separate endpoint, so try it before Invidious.
@@ -490,7 +819,10 @@ public class YoutubeApi {
                 JSONArray invCands = inv.optJSONArray("candidates");
                 if (invCands != null) for (int i = 0; i < invCands.length(); i++) fb.put(invCands.optJSONObject(i));
             }
-            if (fb.length() > 0) { result.put("candidates", fb); }
+            // v1.0.36: signed-in candidates first even when the ANDROID
+            // player call itself failed — they alone can save the track.
+            JSONArray fbAll = prepend(signedCands, fb);
+            if (fbAll.length() > 0) { result.put("candidates", fbAll); }
             else {
                 StartupLog.log("Resolve " + videoId + " LOI: " + e);
                 throw e;

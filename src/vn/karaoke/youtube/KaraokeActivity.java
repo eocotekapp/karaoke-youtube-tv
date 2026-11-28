@@ -44,6 +44,21 @@ public class KaraokeActivity extends Activity {
     private WebView webView;
     private SurfaceView surfaceView;
 
+    // v1.0.36: sign-in WebView (YouTube sign-in with the user's OWN
+    // account). A second WebView laid over the stage, GONE until the
+    // panel asks for sign-in (/api/auth/start -> requestSignIn()).
+    // It loads https://www.youtube.com — the user signs in on Google's
+    // own page (password/2FA handled there; the app never sees them).
+    // After sign-in the youtube.com cookies are read from CookieManager
+    // and stored encrypted by YouTubeAuth. Back closes it (or goes back
+    // inside the sign-in flow); the stage WebView is untouched.
+    private WebView authWebView;
+    private FrameLayout rootView;
+    private static volatile boolean signInRequested = false;
+    /** Called from RemoteServer (/api/auth/start, pool thread) — just
+     * sets a flag; the activity picks it up on its 2 s poll / onResume. */
+    public static void requestSignIn() { signInRequested = true; }
+
     // v1.0.13: in-activity QR card (Gathin original qrCard) — visible on the
     // TV screen itself, no permission needed. Pinggy URL only; hidden while
     // the tunnel is down/reconnecting. Polled every 2 s via stageHandler.
@@ -61,6 +76,10 @@ public class KaraokeActivity extends Activity {
         @Override public void run() {
             try { refreshQrCard(); }
             catch (Throwable t) { StartupLog.log(KaraokeActivity.this, "QR man hinh LOI: " + t); }
+            // v1.0.36: the panel asked for sign-in — open the sign-in
+            // WebView on the TV (checked here + in onResume, so it also
+            // fires if the app was in the background when asked).
+            if (signInRequested) { signInRequested = false; showSignIn(); }
             stageHandler.postDelayed(this, 2000);
         }
     };
@@ -110,6 +129,7 @@ public class KaraokeActivity extends Activity {
         catch (Exception e) { StartupLog.log(this, "startPlayerService LOI: " + e); CrashHandler.log(this, e); }
 
         FrameLayout root = new FrameLayout(this);
+        rootView = root;
         root.setBackgroundColor(0xFF09090D);
 
         surfaceView = new SurfaceView(this);
@@ -248,6 +268,129 @@ public class KaraokeActivity extends Activity {
                 else startService(oi);
             } catch (Exception e) { CrashHandler.log(this, e); }
         }
+    }
+
+    // ================= v1.0.36: YouTube sign-in (own session) =================
+
+    /** Open the sign-in WebView over the stage. Loads youtube.com — the
+     * user signs in on Google's own page. Created lazily on first use. */
+    private void showSignIn() {
+        try {
+            if (authWebView == null) {
+                authWebView = new WebView(this);
+                authWebView.setLayoutParams(new FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+                // Opaque: the sign-in page is Google's own UI, not the stage.
+                authWebView.setBackgroundColor(0xFF0B0B10);
+                WebSettings ws = authWebView.getSettings();
+                ws.setJavaScriptEnabled(true);
+                ws.setDomStorageEnabled(true);
+                ws.setMediaPlaybackRequiresUserGesture(false);
+                // Google refuses sign-in from a WebView that identifies as
+                // one ("This browser or app may not be secure"). A desktop
+                // Chrome UA is the standard workaround — the user still
+                // signs in on Google's own page; the app never sees the
+                // password/2FA. If Google still blocks it, the log will
+                // show the page the user sees (nothing is faked here).
+                ws.setUserAgentString("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36");
+                try {
+                    android.webkit.CookieManager.getInstance().setAcceptCookie(true);
+                    if (Build.VERSION.SDK_INT >= 21)
+                        android.webkit.CookieManager.getInstance().setAcceptThirdPartyCookies(authWebView, true);
+                } catch (Exception ignored) { }
+                authWebView.setWebViewClient(new WebViewClient() {
+                    // No shouldOverrideUrlLoading — Google's sign-in flow
+                    // redirects across accounts.google.com / youtube.com
+                    // and must load normally inside this WebView.
+                    @Override public void onPageFinished(WebView view, String url) {
+                        StartupLog.log(KaraokeActivity.this, "Dang nhap: trang xong " + url);
+                        checkAuthCookies();
+                        // Delayed recheck: the session cookies can be set
+                        // by JS after the load event fires.
+                        stageHandler.postDelayed(new Runnable() {
+                            @Override public void run() { checkAuthCookies(); }
+                        }, 2000);
+                    }
+                    @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                        if (request != null && request.isForMainFrame())
+                            StartupLog.log(KaraokeActivity.this, "Dang nhap LOI trang: " + request.getUrl() + " / " + error.getDescription());
+                    }
+                });
+                if (rootView != null) rootView.addView(authWebView);
+                StartupLog.log(this, "Dang nhap: WebView tao xong");
+            }
+            authWebView.setVisibility(View.VISIBLE);
+            authWebView.requestFocus();
+            authWebView.loadUrl("https://www.youtube.com");
+            android.widget.Toast.makeText(this, "Đăng nhập YouTube trên TV — bấm Back để đóng", android.widget.Toast.LENGTH_LONG).show();
+            StartupLog.log(this, "Dang nhap: mo man hinh dang nhap YouTube");
+        } catch (Throwable t) {
+            StartupLog.log(this, "Dang nhap MO LOI: " + t);
+            CrashHandler.log(this, t);
+        }
+    }
+
+    private void hideSignIn() {
+        try {
+            if (authWebView != null) {
+                authWebView.setVisibility(View.GONE);
+                authWebView.loadUrl("about:blank"); // page only — cookies live in CookieManager
+            }
+            StartupLog.log(this, "Dang nhap: dong man hinh dang nhap");
+        } catch (Throwable t) {
+            StartupLog.log(this, "Dang nhap DONG LOI: " + t);
+        }
+    }
+
+    /** Read the youtube.com cookies after a sign-in page load. When
+     * LOGIN_INFO is present the session is captured (encrypted) and the
+     * sign-in view closes itself. Runs on the main thread (called from
+     * onPageFinished / the delayed recheck). Never logs cookie values. */
+    private void checkAuthCookies() {
+        try {
+            if (authWebView == null || authWebView.getVisibility() != View.VISIBLE) return;
+            String cookies = android.webkit.CookieManager.getInstance().getCookie("https://www.youtube.com");
+            if (cookies == null || !cookies.contains("LOGIN_INFO=")) return;
+            android.webkit.CookieManager.getInstance().flush();
+            boolean ok = YouTubeAuth.getInstance(this).saveFromWebViewCookies(cookies);
+            if (!ok) return;
+            tryCaptureAccountName();
+            hideSignIn();
+            android.widget.Toast.makeText(this, "Đã đăng nhập YouTube", android.widget.Toast.LENGTH_SHORT).show();
+        } catch (Throwable t) {
+            StartupLog.log(this, "Dang nhap doc cookie LOI: " + t);
+        }
+    }
+
+    /** Best-effort account display name from the signed-in page (the
+     * avatar button's aria-label, e.g. "Account: <name>"). Empty when
+     * it cannot be read — the panel then shows just "Đã đăng nhập". */
+    private void tryCaptureAccountName() {
+        try {
+            if (authWebView == null) return;
+            authWebView.evaluateJavascript(
+                    "(function(){var b=document.querySelector('#avatar-btn');"
+                    + "if(b){var l=b.getAttribute('aria-label')||'';return l}"
+                    + "var c=document.querySelector('button[aria-label*=\"@\"]');"
+                    + "return c?c.getAttribute('aria-label'):''})()",
+                    new android.webkit.ValueCallback<String>() {
+                        @Override public void onReceiveValue(String value) {
+                            try {
+                                if (value == null || value.length() < 2) return;
+                                String v = value;
+                                if (v.startsWith("\"") && v.endsWith("\""))
+                                    v = v.substring(1, v.length() - 1);
+                                v = v.replace("\\\"", "\"").replace("\\\\", "\\").trim();
+                                if (v.startsWith("Account:")) v = v.substring(8).trim();
+                                if (v.startsWith("Tài khoản:")) v = v.substring(10).trim();
+                                if (!v.isEmpty() && !"Account".equals(v)) {
+                                    YouTubeAuth.getInstance(KaraokeActivity.this).setAccountName(v);
+                                    StartupLog.log(KaraokeActivity.this, "Dang nhap: ten tai khoan '" + v + "'");
+                                }
+                            } catch (Exception ignored) { }
+                        }
+                    });
+        } catch (Throwable ignored) { }
     }
 
     /**
@@ -530,6 +673,8 @@ public class KaraokeActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         isForeground = true; // v1.0.21
+        // v1.0.36: the panel asked for sign-in while the app was in the background.
+        if (signInRequested) { signInRequested = false; showSignIn(); }
         // v1.0.25: app-open clears a previous Back-dismiss — the activity
         // surface owns the video again from here.
         try { PlayerService s0 = PlayerService.getInstance(); if (s0 != null) s0.clearVideoOverlayDismissed(); } catch (Throwable ignored) { }
@@ -567,6 +712,7 @@ public class KaraokeActivity extends Activity {
         isForeground = false; // v1.0.21
         stageHandler.removeCallbacksAndMessages(null);
         if (webView != null) { webView.destroy(); webView = null; }
+        if (authWebView != null) { authWebView.destroy(); authWebView = null; } // v1.0.36
         super.onDestroy();
     }
 
@@ -574,6 +720,17 @@ public class KaraokeActivity extends Activity {
     private long lastBackPressMs = 0;
 
     @Override public boolean onKeyDown(int keyCode, KeyEvent event) {
+        // v1.0.36: sign-in WebView open — Back goes back inside the
+        // sign-in flow (or closes it); every other key goes to the
+        // WebView, never to the player controls below.
+        if (authWebView != null && authWebView.getVisibility() == View.VISIBLE) {
+            if (keyCode == KeyEvent.KEYCODE_BACK) {
+                if (authWebView.canGoBack()) authWebView.goBack();
+                else hideSignIn();
+                return true;
+            }
+            return super.onKeyDown(keyCode, event);
+        }
         // Stage failed to load: OK on the remote retries instead of playing.
         if ((keyCode == KeyEvent.KEYCODE_DPAD_CENTER || keyCode == KeyEvent.KEYCODE_ENTER)
                 && stageErrorShown) {
