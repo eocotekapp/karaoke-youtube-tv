@@ -41,13 +41,15 @@ public class MesuPlayer {
         HttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
                 .setUserAgent(YoutubeApi.UA)
                 .setAllowCrossProtocolRedirects(true);
-        // v1.0.14: cap video at 1280x720 / 4.5 Mbps exactly like the original
-        // Gathin TrackSelector — the FPT Play 650 decoder advertises 1080p60
-        // support but dies on a 1080p60 segment (log 2026-11-28 07:06).
+        // v1.0.16: default 1080p — the FPT Play 650 played 1920x1080 fine for
+        // ~11 min; only 1080p60 kills its decoder (log 2026-11-28 07:06), so
+        // cap frame rate at 30 fps instead of dropping to 720p. 8 Mbps keeps
+        // 1080p30 selectable (YouTube 1080p30 variants run ~5-6 Mbps).
         DefaultTrackSelector trackSelector = new DefaultTrackSelector(ctx);
         trackSelector.setParameters(trackSelector.buildUponParameters()
-                .setMaxVideoSize(1280, 720)
-                .setMaxVideoBitrate(4500000));
+                .setMaxVideoSize(1920, 1080)
+                .setMaxVideoFrameRate(30)
+                .setMaxVideoBitrate(8000000));
         player = new ExoPlayer.Builder(ctx)
                 .setTrackSelector(trackSelector)
                 .setSeekBackIncrementMs(10000)

@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.15-pinggy (versionCode 16) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
+**Version:** 1.0.16-pinggy (versionCode 17) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -134,6 +134,14 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.16 (default video quality 1080p, user asked 2026-11-28 07:19 "T cần
+  mặc định 1080"): the `DefaultTrackSelector` cap is now max 1920x1080,
+  max 30 fps (`setMaxVideoFrameRate(30)`), max 8 Mbps. v1.0.14's 720p cap
+  was too blunt — the FPT Play 650 played 1920x1080 fine for ~11 minutes
+  and only died on a 1080p60 segment (avc1.4D402A, 5.5 Mbps), so 1080p
+  itself is fine and 60 fps is what kills the box. 8 Mbps keeps 1080p30
+  selectable (YouTube 1080p30 variants run ~5-6 Mbps) while still
+  guarding the weak box.
 - v1.0.15 (phone control panel dead, verified live against the user's box
   through its Pinggy tunnel, 2026-11-28 07:10): `GET /api/state` returned
   `{}` on every call and `/api/control?action=toggle` closed the connection
