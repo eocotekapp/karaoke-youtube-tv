@@ -4,6 +4,7 @@ import android.content.Context;
 import android.net.Uri;
 import android.view.Surface;
 import com.google.android.exoplayer2.C;
+import com.google.android.exoplayer2.ExoPlaybackException;
 import com.google.android.exoplayer2.ExoPlayer;
 import com.google.android.exoplayer2.MediaItem;
 import com.google.android.exoplayer2.PlaybackException;
@@ -157,6 +158,49 @@ public class MesuPlayer {
 
     public MesuPlayer(Context ctx) { this.ctx = ctx.getApplicationContext(); }
 
+    /** v1.0.34: one-line cause detail for a PlaybackException — the
+     * ExoPlaybackException type (SOURCE/RENDERER/UNEXPECTED/REMOTE),
+     * renderer index + name, error-code name and the cause chain (up
+     * to 4 levels, class + message each, each message capped at 200
+     * chars). Appended to the "Phat LOI" line so a PLAY-ERR upload
+     * names the real failure: earlier uploads only carried the top
+     * message ("Source error" / "Unexpected runtime error") with no
+     * usable cause, which is why long-video failures could not be
+     * diagnosed. NOTE: 2.19.1 has NO TYPE_TIMEOUT (timeouts surface
+     * as ERROR_CODE_TIMEOUT / ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+     * in the error-code name); the switch defaults to the raw int
+     * for any value it does not know. */
+    private static String errDetail(PlaybackException e) {
+        StringBuilder b = new StringBuilder();
+        if (e instanceof ExoPlaybackException) {
+            ExoPlaybackException x = (ExoPlaybackException) e;
+            b.append(" | type=");
+            switch (x.type) {
+                case ExoPlaybackException.TYPE_SOURCE: b.append("SOURCE"); break;
+                case ExoPlaybackException.TYPE_RENDERER: b.append("RENDERER"); break;
+                case ExoPlaybackException.TYPE_UNEXPECTED: b.append("UNEXPECTED"); break;
+                case ExoPlaybackException.TYPE_REMOTE: b.append("REMOTE"); break;
+                default: b.append(x.type); break;
+            }
+            b.append(" renderer=").append(x.rendererIndex);
+            if (x.rendererName != null) b.append(" (").append(x.rendererName).append(")");
+        }
+        try { b.append(" | code=").append(e.getErrorCodeName()); } catch (Exception ignored) { }
+        Throwable c = e.getCause();
+        int n = 0;
+        b.append(" | cause:");
+        if (c == null) b.append(" -");
+        while (c != null && n < 4) {
+            String m = c.getMessage();
+            if (m == null) m = "";
+            if (m.length() > 200) m = m.substring(0, 200) + "…";
+            b.append(" [").append(c.getClass().getSimpleName()).append(": ").append(m).append("]");
+            c = c.getCause();
+            n++;
+        }
+        return b.toString();
+    }
+
     public synchronized void ensurePlayer() {
         if (player != null) return;
         HttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
@@ -212,7 +256,7 @@ public class MesuPlayer {
                 if (hlsDirectUrl != null && !hlsProxyRetried && !hlsPlayedOnce) {
                     hlsProxyRetried = true;
                     final String u = hlsDirectUrl;
-                    StartupLog.log("Phat " + currentId + ": hls truc tiep LOI, thu qua proxy: " + error.getMessage());
+                    StartupLog.log("Phat " + currentId + ": hls truc tiep LOI, thu qua proxy: " + error.getMessage() + errDetail(error));
                     new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
                         @Override public void run() { retryHlsViaProxy(u); }
                     });
@@ -220,7 +264,7 @@ public class MesuPlayer {
                 }
                 lastState = -1;
                 lastError = error.getMessage() == null ? "playback error" : error.getMessage();
-                StartupLog.log("Phat LOI (" + currentId + " '" + currentTitle + "'): " + error);
+                StartupLog.log("Phat LOI (" + currentId + " '" + currentTitle + "'): " + error + errDetail(error));
                 LogUploader.send("PLAY-ERR");
             }
         });

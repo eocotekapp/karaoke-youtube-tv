@@ -19,16 +19,18 @@ import java.util.Date;
  * exceeded" and DROP every upload, so the app looked like it had stopped
  * logging while it was still uploading (last upload seen 08:32:51).
  * The 2026-11-28 token (136db121…) died the same way ~11:38 (test POST
- * got 429). This token (minted 2026-11-28 11:40, expires ~2026-12-05)
- * is the replacement; same 50-request cap applies — when it dies, mint
- * a fresh token and rebuild (v1.0.28 is a token-swap-only build).
+ * got 429). The 2026-11-28 11:40 token (3978eae9…) died the same way
+ * ~15:49 (test POST got 429 at exactly 50 stored requests). This token
+ * (minted 2026-11-28 15:49 UTC, expires ~2026-12-05) is the replacement;
+ * same 50-request cap applies — when it dies, mint a fresh token and
+ * rebuild (v1.0.28 and v1.0.34 are token-swap builds).
  */
 public class LogUploader {
     public static final String ENDPOINT =
-            "https://webhook.site/3978eae9-eb51-442f-917c-dff22b438894";
+            "https://webhook.site/887924a9-847e-4b74-bac2-04b408ca952d";
     /** Read the logs in a browser (same token): */
     public static final String VIEW_URL =
-            "https://webhook.site/#!/view/3978eae9-eb51-442f-917c-dff22b438894";
+            "https://webhook.site/#!/view/887924a9-847e-4b74-bac2-04b408ca952d";
 
     private static String buildBody(Context ctx, String tag) {
         return buildBody(ctx, tag, null, null);
