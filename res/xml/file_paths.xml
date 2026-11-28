@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- v1.0.27: the self-update APK lives in the app cache dir; FileProvider
+     serves it to the system installer (ACTION_VIEW + grantUriPermissions). -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="update" path="." />
+</paths>

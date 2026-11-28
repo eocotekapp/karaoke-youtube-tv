@@ -5,8 +5,8 @@
      NO Termux, NO com.gathin.* references. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="vn.karaoke.youtube"
-    android:versionCode="27"
-    android:versionName="1.0.26-pinggy">
+    android:versionCode="28"
+    android:versionName="1.0.27-pinggy">
 
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="30" />
 
@@ -23,6 +23,11 @@
          silently dropped (see PlayerService). On API 30 this is granted by
          default; the declaration is for correctness. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <!-- v1.0.27 self-update: the app installs its own updates (one tap on
+         the system installer — silent install is impossible on a stock box).
+         Declaring it does not grant it; the user grants it once in Settings
+         (see KaraokeActivity.maybePromptInstall). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
@@ -63,6 +68,20 @@
         <service
             android:name=".QrOverlayService"
             android:exported="false" />
+        <!-- v1.0.27: FileProvider serves the downloaded update APK to the
+             system installer (ACTION_VIEW + FLAG_GRANT_READ_URI_PERMISSION).
+             The APK lives in the app cache dir (see res/xml/file_paths.xml).
+             No silent install is possible on a stock box — the user still
+             taps "Cài đặt" once on the installer screen. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="vn.karaoke.youtube.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
         <receiver
             android:name=".BootReceiver"
             android:exported="true">

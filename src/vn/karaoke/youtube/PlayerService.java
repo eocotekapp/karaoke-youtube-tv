@@ -43,6 +43,9 @@ public class PlayerService extends Service {
     private LibraryState library;
     private RemoteServer server;
     private PinggyTunnel tunnel;
+    // v1.0.27: self-update (UpdateChecker) — owned by the service, started
+    // in onCreate; the panel reads its state via getUpdateChecker().
+    private UpdateChecker updateChecker;
     private PowerManager.WakeLock wakeLock;
     private android.net.wifi.WifiManager.WifiLock wifiLock;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -157,6 +160,11 @@ public class PlayerService extends Service {
         }
         handler.postDelayed(endCheck, 3000);
         handler.postDelayed(watchdog, 10000);
+        // v1.0.27: self-update — first check ~20 s after start (the service
+        // just came up; the network/tunnel is still settling), then every
+        // ~6 h via the watchdog (UpdateChecker.maybeCheckPeriodic).
+        updateChecker = new UpdateChecker(this);
+        handler.postDelayed(updateCheckStart, 20000);
         // Floating QR overlay (Pinggy URL only) — independent of the activity.
         // Only start it when overlay permission is granted: starting it
         // without permission made it stop without startForeground() and
@@ -170,12 +178,14 @@ public class PlayerService extends Service {
 
     // Watchdog: revive RemoteServer if it died, revive the Pinggy session if
     // it dropped without the tunnel's own reconnect loop catching it.
+    // v1.0.27: also gates the self-update check cadence (~6 h).
     private final Runnable watchdog = new Runnable() {
         @Override public void run() {
             try {
                 if (server != null && !server.isRunning()) server.start();
                 if (tunnel != null && tunnel.isEnabled()
                         && "off".equals(tunnel.getState())) tunnel.start();
+                if (updateChecker != null) updateChecker.maybeCheckPeriodic();
             } catch (Exception ignored) { }
             handler.postDelayed(this, 10000);
         }
@@ -729,6 +739,18 @@ public class PlayerService extends Service {
     public LibraryState getLibrary() { return library; }
     public RemoteServer getServer() { return server; }
     public PinggyTunnel getTunnel() { return tunnel; }
+    /** v1.0.27: the self-update checker (null until onCreate runs). */
+    public UpdateChecker getUpdateChecker() { return updateChecker; }
+
+    // v1.0.27: first update check shortly after the service starts (plain
+    // HTTPS to raw.githubusercontent.com — no tunnel involved). The 6 h
+    // cadence after that is gated by the watchdog (maybeCheckPeriodic).
+    private final Runnable updateCheckStart = new Runnable() {
+        @Override public void run() {
+            try { if (updateChecker != null) updateChecker.check(); }
+            catch (Throwable ignored) { }
+        }
+    };
 
     private Notification buildNotification(String text) {
         if (Build.VERSION.SDK_INT >= 26) {
@@ -766,6 +788,7 @@ public class PlayerService extends Service {
         handler.removeCallbacks(watchdog);
         handler.removeCallbacks(playBgUpload);
         handler.removeCallbacks(bringToFrontCheck);
+        handler.removeCallbacks(updateCheckStart); // v1.0.27
         hideVideoOverlay(); // best-effort: the window dies with the process anyway
         if (tunnel != null) tunnel.stop();
         if (server != null) server.stop();

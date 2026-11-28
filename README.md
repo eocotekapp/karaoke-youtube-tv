@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.26-pinggy (versionCode 27) · **APK:** `KaraokeYouTube.apk` — **2,769,372 bytes**
+**Version:** 1.0.27-pinggy (versionCode 28) · **APK:** `KaraokeYouTube.apk` — **2,777,631 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -287,6 +287,48 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   unchanged. Rationale: 64dp = 128 physical px on this 320dpi box, ~2.8px
   per module for the v5 panel URL — still scannable from the couch, and
   half the Gathin original's 132dp.
+- v1.0.27 (SELF-UPDATE, user asked 2026-11-28 11:22 "Tao muon no tu update
+  khi co phien ban moi. Chu cu phai cai thu cong met lol ghe"): the app now
+  updates itself — as far as a stock, unrooted box allows. HONEST LIMIT
+  (never claimed otherwise): a fully SILENT install is impossible for a
+  normal app on a stock box (only system apps / root can install without
+  the user's tap). What happens: `UpdateChecker` fetches
+  `https://raw.githubusercontent.com/eocotekapp/karaoke-youtube-tv/main/version.json`
+  (plain HTTPS, no tunnel) ~20 s after the service starts and every ~6 h
+  while it runs (gated by the existing 10 s watchdog tick — no new timer
+  service; a failed check retries in 30 min). If remote versionCode >
+  this build's, it downloads the APK to the app cache, verifies it with
+  `PackageManager.getPackageArchiveInfo` (package must be
+  `vn.karaoke.youtube`, versionCode exactly the announced one — anything
+  else is deleted, never installed), then posts a HIGH-PRIORITY
+  notification (channel `karaoke_update`, id 8794) "Có bản Karaoke mới
+  <name> — chạm để cài đặt" and, if the activity is in the foreground,
+  fires the system installer directly. The APK is served to the installer
+  via `androidx.core.content.FileProvider` (authority
+  `vn.karaoke.youtube.fileprovider`, `res/xml/file_paths.xml` cache-path)
+  with `FLAG_GRANT_READ_URI_PERMISSION`; the user still taps "Cài đặt"
+  once. A finished download is never re-downloaded
+  (`update_downloaded_version` in `karaoke_prefs`); a verified download
+  re-prompts on the next check / app start, never nags in between. The
+  UPDATE log tag uploads ONLY when a new version is found and when a
+  download completes, once per version each (the webhook token caps at
+  50 requests — routine no-update checks upload nothing). One-time
+  unknown-sources grant: `REQUEST_INSTALL_PACKAGES` in the manifest plus a
+  one-time dismissible dialog on launch (`install_prompt_asked`, modelled
+  on the v1.0.14 overlay prompt) that opens
+  `Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES` for this package; declining
+  leaves auto-update off until the grant is given, and returning from
+  Settings re-runs the check at once (`recheckAfterGrant()` in
+  `onResume`). The phone panel shows one update row ("Tự cập nhật: Bật •
+  có bản 1.0.27 — đã tải xong, xem thông báo trên TV để cài đặt") plus a
+  Bật/Tắt toggle (`/api/update?action=toggle`, default ON); `/api/state`
+  carries `autoUpdate` / `updateAvailable` / `updateVersion` /
+  `updateState` (none/checking/downloading/ready/error/grant). The parent
+  updates version.json on every release — the app never hardcodes a
+  version-specific Vercel URL. NOT yet verified on the real box: the whole
+  install flow (notification tap, direct intent, grant dialog) can only be
+  proven after the user installs v1.0.27 once — this build itself still
+  goes in by Downloader code, like every version before it.
 - v1.0.22 (QR smaller while a video is playing, user asked 2026-11-28
   08:33 "Tôi cần QR bé hơn khi đang trong trình phát video"): while a video
   is playing (player state st==1 in "st,pos,dur,w,h,f") both QRs shrink to

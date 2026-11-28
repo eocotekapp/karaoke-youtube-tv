@@ -231,6 +231,7 @@ public class KaraokeActivity extends Activity {
 
         loadStageWhenReady();
         maybePromptOverlay(); // v1.0.14: one-time overlay-permission prompt
+        maybePromptInstall(); // v1.0.27: one-time unknown-sources grant for self-update
         stageHandler.post(qrPoll); // in-activity QR card refresh (2 s)
         // v1.0.5: the app now sends its startup log to Mesu by itself
         // (LogUploader, webhook.site) ~6 s after launch — no photo needed.
@@ -287,6 +288,48 @@ public class KaraokeActivity extends Activity {
                     .show();
         } catch (Throwable t) {
             StartupLog.log(this, "Overlay prompt LOI: " + t);
+        }
+    }
+
+    /**
+     * v1.0.27: ONE-TIME unknown-sources prompt for self-update, modelled on
+     * maybePromptOverlay() (v1.0.14): small native dialog, dismissible,
+     * asked once ever — either choice marks it asked. Without this grant
+     * (Settings > install unknown apps for this app) the app can download
+     * a new version but the system installer refuses to run it, so
+     * UpdateChecker stays in state "grant" and never nags with a
+     * notification. If the user declines, auto-update stays off until the
+     * grant is given (checked again on next start; the dialog never
+     * re-appears — the grant can also be given from Settings manually).
+     * Below API 26 there is no per-app grant (unknown-sources is a global
+     * install-time setting), so nothing is asked.
+     */
+    private void maybePromptInstall() {
+        try {
+            if (Build.VERSION.SDK_INT < 26) return;
+            if (getPackageManager().canRequestPackageInstalls()) return; // already granted
+            SharedPreferences prefs = getSharedPreferences("karaoke_prefs", MODE_PRIVATE);
+            if (prefs.getBoolean("install_prompt_asked", false)) return;
+            prefs.edit().putBoolean("install_prompt_asked", true).apply();
+            new AlertDialog.Builder(this)
+                    .setTitle("Cho phép tự cập nhật?")
+                    .setMessage("Cho phép Karaoke tự tải bản mới và hiện màn hình cài đặt, để anh không phải cài thủ công qua Downloader nữa. App chỉ cài khi anh bấm Cài đặt.")
+                    .setPositiveButton("Cho phép", new DialogInterface.OnClickListener() {
+                        @Override public void onClick(DialogInterface d, int which) {
+                            try {
+                                Intent gi = new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                        Uri.parse("package:" + getPackageName()));
+                                startActivity(gi);
+                            } catch (Exception e) {
+                                StartupLog.log(KaraokeActivity.this, "Mo man hinh cap quyen cai dat LOI: " + e);
+                            }
+                        }
+                    })
+                    .setNegativeButton("Để sau", null)
+                    .setCancelable(true)
+                    .show();
+        } catch (Throwable t) {
+            StartupLog.log(this, "Install prompt LOI: " + t);
         }
     }
 
@@ -513,6 +556,10 @@ public class KaraokeActivity extends Activity {
         // v1.0.14: start the floating QR right after the user returns from
         // granting the overlay permission (prompt in onCreate / panel button).
         startQrOverlay();
+        // v1.0.27: the user may have just granted unknown-sources in
+        // Settings — if an update is downloaded and waiting for the grant,
+        // re-run the check at once instead of waiting up to 6 h.
+        try { PlayerService s1 = PlayerService.getInstance(); if (s1 != null && s1.getUpdateChecker() != null) s1.getUpdateChecker().recheckAfterGrant(); } catch (Throwable ignored) { }
         if (webView != null) webView.loadUrl("javascript:if(window.refresh)refresh()");
     }
 

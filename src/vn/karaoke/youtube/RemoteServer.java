@@ -212,6 +212,17 @@ public class RemoteServer {
         try { o.put("pinggyState", tunnel == null ? "off" : tunnel.getState()); } catch (Exception e) { safePut(o, "pinggyState", "off"); }
         try { o.put("pinggyEnabled", tunnel != null && tunnel.isEnabled()); } catch (Exception e) { safePut(o, "pinggyEnabled", false); }
         try { o.put("sleepMinutesLeft", service == null ? 0 : service.sleepMinutesLeft()); } catch (Exception e) { safePut(o, "sleepMinutesLeft", 0); }
+        // v1.0.27: self-update status for the panel (one row + toggle).
+        try {
+            UpdateChecker u = service == null ? null : service.getUpdateChecker();
+            o.put("autoUpdate", u == null ? UpdateChecker.isAutoUpdateEnabled(ctx) : u.isAutoUpdate());
+            o.put("updateAvailable", u != null && u.isAvailable());
+            o.put("updateVersion", u == null ? "" : u.getRemoteVersionName());
+            o.put("updateState", u == null ? "none" : u.getState());
+        } catch (Exception e) {
+            safePut(o, "autoUpdate", true); safePut(o, "updateAvailable", false);
+            safePut(o, "updateVersion", ""); safePut(o, "updateState", "none");
+        }
         return o;
     }
 
@@ -472,6 +483,26 @@ public class RemoteServer {
                 sendJson(out, new JSONObject(new MesuResolver().resolve(id)));
                 return;
             }
+            case "/api/update": {
+                // v1.0.27: self-update control — toggle only. The check /
+                // download / install prompt all run inside UpdateChecker
+                // (service start + ~6 h watchdog cadence); the panel just
+                // flips the auto_update flag (default ON) and reads status.
+                String action = q.get("action");
+                if ("toggle".equals(action)) {
+                    boolean on = !UpdateChecker.isAutoUpdateEnabled(ctx);
+                    UpdateChecker.setAutoUpdateEnabled(ctx, on);
+                    StartupLog.log(ctx, "Tu cap nhat: " + (on ? "BAT" : "TAT"));
+                }
+                JSONObject o = new JSONObject();
+                UpdateChecker u = service == null ? null : service.getUpdateChecker();
+                o.put("autoUpdate", UpdateChecker.isAutoUpdateEnabled(ctx));
+                o.put("updateAvailable", u != null && u.isAvailable());
+                o.put("updateVersion", u == null ? "" : u.getRemoteVersionName());
+                o.put("updateState", u == null ? "none" : u.getState());
+                sendJson(out, o);
+                return;
+            }
             case "/stream": {
                 proxyStream(q.get("u"), headers, out);
                 return;
@@ -547,6 +578,7 @@ public class RemoteServer {
         "<h2>Link</h2><div class='url' id='links'></div>" +
         "<div class='row'><span>Pinggy:</span><button onclick=\"pinggy('enable')\">Bật</button><button onclick=\"pinggy('disable')\">Tắt</button><button onclick=\"pinggy('restart')\">Đổi link</button><span class='muted' id='pg'></span></div>" +
         "<div class='row'><span>QR nổi:</span><button onclick=\"overlay('enable')\">Hiện</button><button onclick=\"overlay('disable')\">Ẩn</button><button onclick=\"overlay('grant')\">Cấp quyền</button><span class='muted'>QR chỉ hiện link Pinggy, tunnel chết thì tự ẩn</span></div>" +
+        "<div class='row'><span>Cập nhật:</span><span class='muted' id='upd'>—</span><button onclick=\"updToggle()\">Bật/Tắt tự cập nhật</button></div>" +
         "<script>" +
         // v1.0.19: Pinggy free serves a "Caution" interstitial to browser UAs on
         // EVERY request (incl. /api/state) — fetch() gets HTML, r.json() throws and
@@ -565,6 +597,7 @@ public class RemoteServer {
         "async function ctl(a){await api('/api/control?action='+a);refresh();}" +
         "async function pinggy(a){await api('/api/pinggy?action='+a);refresh();}" +
         "async function overlay(a){await api('/api/overlay?action='+a);refresh();}" +
+        "async function updToggle(){await api('/api/update?action=toggle');refresh();}" +
         "async function search(){const q=document.getElementById('q').value;if(!q)return;" +
         "const d=await api('/api/search?q='+encodeURIComponent(q));" +
         "document.getElementById('results').innerHTML=(d.results||[]).map(v=>\"<div class='item' onclick=\\\"playnow('\"+v.id+\"','\"+v.title.replace(/'/g,'')+\"')\\\">\"+(v.thumb?\"<img src='\"+v.thumb+\"'>\":\"\")+v.title+\"<br><span class='muted'>\"+v.channel+\" • \"+v.durationText+\"</span> <button onclick=\\\"event.stopPropagation();enqueue('\"+v.id+\"','\"+v.title.replace(/'/g,'')+\"')\\\">+ Đợi</button></div>\").join('')||'Không tìm thấy';}" +
@@ -578,6 +611,8 @@ public class RemoteServer {
         "document.getElementById('queue').innerHTML=(s.queue||[]).map((v,i)=>\"<div class='item'>\"+(i===s.currentIndex?'▶ ':'')+v.title+\" <button onclick=\\\"jump(\"+i+\")\\\">Phát</button> <button onclick=\\\"rm(\"+i+\")\\\">Xóa</button></div>\").join('')||'Hàng đợi trống';" +
         "document.getElementById('links').innerHTML='LAN: '+s.lanUrl+'/panel'+(s.pinggyUrl?'<br>Internet (Pinggy): '+s.pinggyUrl+'/panel ('+s.pinggyState+')':'<br>Internet (Pinggy): '+s.pinggyState);" +
         "document.getElementById('pg').textContent=s.pinggyState;" +
+        "var us=s.updateState||'none';var ut=us==='downloading'?'đang tải':us==='ready'?'đã tải xong — xem thông báo trên TV để cài đặt':us==='checking'?'đang kiểm tra':us==='error'?'lỗi, sẽ thử lại sau':us==='grant'?'cần cấp quyền cài đặt trong Cài đặt':'';" +
+        "document.getElementById('upd').textContent='Tự cập nhật: '+(s.autoUpdate?'Bật':'Tắt')+(s.updateAvailable?' • có bản '+s.updateVersion+(ut?' — '+ut:''):ut?' • '+ut:'');" +
         "const pl=await api('/api/playlists');" +
         "document.getElementById('playlists').innerHTML=(pl.playlists||[]).map(p=>\"<div class='item'>\"+p.name+\" (\"+p.items.length+\") <button onclick=\\\"plPlay('\"+p.name+\"')\\\">Phát</button></div>\").join('')||'Chưa có playlist';}catch(e){document.getElementById('now').textContent='Đang kết nối lại…';}}" +
         "async function jump(i){await api('/api/control?action=jump&index='+i);refresh();}" +
