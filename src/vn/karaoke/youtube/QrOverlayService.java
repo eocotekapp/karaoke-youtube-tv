@@ -15,14 +15,12 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.provider.Settings;
 import android.util.DisplayMetrics;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.WindowManager;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
-import android.widget.TextView;
 
 /**
  * Floating QR overlay — visible over ANY app and over the home screen/launcher.
@@ -33,7 +31,7 @@ import android.widget.TextView;
  * MesuHome.build() puts a white rounded card on the launcher home screen with
  *   - QR ImageView 132dp x 132dp  (const/16 132, MesuUi.dp(ctx,132))
  *   - card: white GradientDrawable, corner radius 12dp, padding 9dp (left/top/
- *     right) and 6dp (bottom), label "Karaoke" 16sp colour 0xFF14213A, centred
+ *     right) and 6dp (bottom) — the "Karaoke" label was removed in v1.0.33
  *   - position: FrameLayout gravity 0x00800053 = BOTTOM|START (bottom-LEFT),
  *     margins 16dp left / 16dp bottom; refreshed every 45 s
  *   - bitmap: MesuUi.qrBitmap(url, px) — quiet zone 2 modules each side
@@ -57,9 +55,10 @@ import android.widget.TextView;
  * including the home screen; the 3x branch, the home detection and the
  * usage-access prompt are all deleted, and PACKAGE_USAGE_STATS is gone
  * from the manifest.
- * v1.0.22: while a video is playing the QR shrinks to 48dp (label 12sp)
+ * v1.0.22: while a video is playing the QR shrinks to 48dp
  * instead of 64dp — the playing size wins over the tap toggle, so the
  * card covers less of the video.
+ * v1.0.33 (user, 2026-11-28): label removed; anchor moved to TOP-RIGHT.
  *
  * TWO STATES ONLY (user rule, 2026-11-27):
  *   - Pinggy connected  -> QR visible, showing the CURRENT Pinggy public URL.
@@ -79,23 +78,19 @@ public class QrOverlayService extends Service {
     // v1.0.26: base QR is 64dp, playing 48dp (user: "Cai tv t co 300dp thoi").
     private static final int GATHIN_QR_DP = 64;
     // v1.0.22: while a video is playing the floating QR shrinks to 48dp
-    // (label 12sp) so it covers less of the video. Anywhere else it is the
+    // so it covers less of the video. Anywhere else it is the
     // 64dp base. The home-screen 3x rule is GONE (v1.0.26).
     private static final int PLAYING_QR_DP = 48;
-    private static final int PLAYING_LABEL_SP = 12;
     private static final int CARD_PAD_SIDE_DP = 4; // v1.0.17: was 9 — white bg too wide
     private static final int CARD_PAD_BOTTOM_DP = 3; // v1.0.17: was 6
     private static final int CARD_RADIUS_DP = 12;
     private static final int MARGIN_DP = 16;
-    private static final int LABEL_SP = 16;
-    private static final int LABEL_COLOR = 0xFF14213A;
 
     private static final long POLL_MS = 1500; // Pinggy URL refresh
 
     private WindowManager wm;
     private LinearLayout card;
     private ImageView qrView;
-    private TextView label;
     private WindowManager.LayoutParams params;
     private Handler handler;
     private String currentUrl = "";
@@ -172,15 +167,6 @@ public class QrOverlayService extends Service {
                 dp(GATHIN_QR_DP), dp(GATHIN_QR_DP)));
         card.addView(qrView);
 
-        label = new TextView(this);
-        label.setText("Karaoke");
-        label.setTextColor(LABEL_COLOR);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, LABEL_SP);
-        label.setGravity(Gravity.CENTER);
-        // v1.0.17: pull the label tight under the QR (same as the in-activity card).
-        label.setIncludeFontPadding(false);
-        label.setLineSpacing(0, 1.0f);
-        card.addView(label);
 
         card.setVisibility(View.GONE); // hidden until a Pinggy URL exists
         int type = Build.VERSION.SDK_INT >= 26
@@ -188,14 +174,14 @@ public class QrOverlayService extends Service {
                 : WindowManager.LayoutParams.TYPE_PHONE;
         params = new WindowManager.LayoutParams(
                 dp(GATHIN_QR_DP + 2 * CARD_PAD_SIDE_DP),
-                dp(GATHIN_QR_DP + CARD_PAD_SIDE_DP + CARD_PAD_BOTTOM_DP + 24),
+                dp(GATHIN_QR_DP + CARD_PAD_SIDE_DP + CARD_PAD_BOTTOM_DP),
                 type,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                         | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                 PixelFormat.TRANSLUCENT);
-        params.gravity = Gravity.TOP | Gravity.START;
+        params.gravity = Gravity.TOP | Gravity.END;
         params.x = dp(MARGIN_DP);
-        params.y = dp(MARGIN_DP); // top-left, 16dp margins (v1.0.20)
+        params.y = dp(MARGIN_DP); // top-right, 16dp margins (v1.0.33)
         card.setOnTouchListener(new View.OnTouchListener() {
             private float downRawX, downRawY;
             private int downX, downY;
@@ -215,7 +201,7 @@ public class QrOverlayService extends Service {
                         if (Math.abs(dx) > 10 || Math.abs(dy) > 10) moved = true;
                         if (moved) {
                             anchored = false;
-                            params.x = downX + dx;
+                            params.x = downX - dx; // END gravity: x is the offset from the RIGHT edge, so dragging right (dx>0) must decrease x
                             params.y = downY + dy;
                             clampPosition();
                             try { wm.updateViewLayout(card, params); } catch (Exception ignored) { }
@@ -357,7 +343,7 @@ public class QrOverlayService extends Service {
      * v1.0.24: also shrink while the video plays on the service-owned
      * overlay over the home screen / other apps — the user's v1.0.22 ask
      * was "QR smaller while a video is playing", the video can now play
-     * in the background too. Sizes: 48dp / 12sp (v1.0.26: was 64dp). */
+     * in the background too. Sizes: 48dp (v1.0.26: was 64dp). */
     private boolean isPlayingInForeground() {
         try {
             PlayerService svc0 = PlayerService.getInstance();
@@ -370,10 +356,10 @@ public class QrOverlayService extends Service {
         } catch (Throwable t) { return false; }
     }
 
-    /** Resize the whole card (QR + padding + label together, Gathin ratio).
+    /** Resize the whole card (QR + padding together, Gathin ratio).
      * v1.0.26: no scale anymore — the QR is 64dp normally, 48dp while
      * shrunk (playing, or tap-toggled small); padding/radius are the base
-     * values either way, label 12sp while shrunk, 16sp otherwise. */
+     * values either way. v1.0.33: no label anymore. */
     private void applySize() {
         if (card == null) return;
         int qr = currentQrDp();
@@ -386,16 +372,14 @@ public class QrOverlayService extends Service {
         lp.width = dp(qr);
         lp.height = dp(qr);
         qrView.setLayoutParams(lp);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP,
-                playingShrunk ? PLAYING_LABEL_SP : LABEL_SP);
         int w = dp(qr + 2 * CARD_PAD_SIDE_DP);
         params.width = w;
-        // Measure the real card height (QR + label + padding) before placing it.
+        // Measure the real card height (QR + padding) before placing it.
         card.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         int h = Math.max(card.getMeasuredHeight(), dp(qr));
         params.height = h;
-        if (anchored) { // top-left anchor, 16dp margins (v1.0.20)
+        if (anchored) { // top-right anchor, 16dp margins (v1.0.33)
             params.x = dp(MARGIN_DP);
             params.y = dp(MARGIN_DP);
         } else {

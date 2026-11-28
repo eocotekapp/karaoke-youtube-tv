@@ -11,7 +11,6 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.SurfaceHolder;
@@ -48,17 +47,14 @@ public class KaraokeActivity extends Activity {
     // v1.0.13: in-activity QR card (Gathin original qrCard) — visible on the
     // TV screen itself, no permission needed. Pinggy URL only; hidden while
     // the tunnel is down/reconnecting. Polled every 2 s via stageHandler.
-    // v1.0.22: the QR shrinks while a video is playing (48dp + 12sp label),
-    // back to 64dp + 16sp when paused/idle — less of the video covered.
+    // v1.0.22: the QR shrinks while a video is playing (48dp),
+    // back to 64dp when paused/idle — less of the video covered.
     // v1.0.26: base 64dp (was 96dp), playing 48dp (was 64dp) — user: the TV
     // is only 300dp, the QR was far too big.
     private static final int QR_DP_NORMAL = 64;
     private static final int QR_DP_PLAYING = 48;
-    private static final int QR_LABEL_SP_NORMAL = 16;
-    private static final int QR_LABEL_SP_PLAYING = 12;
     private LinearLayout qrCard;
     private ImageView qrImage;
-    private TextView qrLabel;
     private int currentQrDp = QR_DP_NORMAL;
     private String currentQrUrl = "";
     private final Runnable qrPoll = new Runnable() {
@@ -406,14 +402,16 @@ public class KaraokeActivity extends Activity {
      * v1.0.13: QR card inside the Activity, reproducing the Gathin original
      * qrCard (measured from tvhome-new.apk, classes5.dex — read-only):
      * white rounded card, corner radius 12dp, padding 9dp (left/top/right)
-     * and 6dp (bottom), QR 132dp x 132dp, label "Karaoke" 16sp colour
-     * 0xFF14213A centred, bottom-LEFT with 16dp margins. Same styling as
+     * and 6dp (bottom), QR 132dp x 132dp, bottom-LEFT with 16dp margins.
+     * v1.0.33: the "Karaoke" label is GONE (user asked to remove it) —
+     * the card wraps the QR only. Same styling as
      * QrOverlayService's floating card, but this one lives in the Activity
      * itself so it needs no overlay permission — it is the QR the user scans
      * to open the phone panel. Hidden until a Pinggy URL exists.
      * v1.0.20 (user, 2026-11-28): QR is now 96dp and the card sits at the
      * TOP-LEFT corner (16dp margins) — smaller, out of the way of the video.
      * v1.0.26: QR is 64dp (was 96dp), 48dp while playing (was 64dp).
+     * v1.0.33: label removed; card moved to the TOP-RIGHT corner.
      */
     private LinearLayout buildQrCard() {
         LinearLayout card = new LinearLayout(this);
@@ -431,21 +429,11 @@ public class KaraokeActivity extends Activity {
         qrImage.setScaleType(ImageView.ScaleType.FIT_XY);
         qrImage.setLayoutParams(new LinearLayout.LayoutParams(dp(QR_DP_NORMAL), dp(QR_DP_NORMAL)));
         card.addView(qrImage);
-        qrLabel = new TextView(this);
-        qrLabel.setText("Karaoke");
-        qrLabel.setTextColor(0xFF14213A);
-        qrLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, QR_LABEL_SP_NORMAL);
-        qrLabel.setGravity(Gravity.CENTER);
-        // v1.0.17: pull the label tight under the QR — no font padding, no
-        // extra line spacing, so the card wastes no vertical space.
-        qrLabel.setIncludeFontPadding(false);
-        qrLabel.setLineSpacing(0, 1.0f);
-        card.addView(qrLabel);
         card.setVisibility(View.GONE);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.gravity = Gravity.START | Gravity.TOP; // top-left (v1.0.20)
-        lp.leftMargin = dp(16);
+        lp.gravity = Gravity.END | Gravity.TOP; // top-right (v1.0.33)
+        lp.rightMargin = dp(16);
         lp.topMargin = dp(16);
         card.setLayoutParams(lp);
         return card;
@@ -463,8 +451,8 @@ public class KaraokeActivity extends Activity {
         } catch (Throwable t) { return false; }
     }
 
-    /** v1.0.22: shrink the QR while a video is playing (48dp, label 12sp),
-     * back to 64dp / 16sp when paused or idle. Only re-applies on change;
+    /** v1.0.22: shrink the QR while a video is playing (48dp),
+     * back to 64dp when paused or idle. Only re-applies on change;
      * the 512px bitmap + FIT_XY scale type stay — changing the ImageView
      * size is enough, the bitmap is never regenerated for a size change. */
     private void applyQrSize(boolean playing) {
@@ -475,8 +463,6 @@ public class KaraokeActivity extends Activity {
         lp.width = dp(wantDp);
         lp.height = dp(wantDp);
         qrImage.setLayoutParams(lp);
-        if (qrLabel != null) qrLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP,
-                playing ? QR_LABEL_SP_PLAYING : QR_LABEL_SP_NORMAL);
     }
 
     /** Pinggy URL only — hidden when the tunnel has no URL. Never the LAN URL.
