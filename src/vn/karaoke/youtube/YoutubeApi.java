@@ -218,6 +218,29 @@ public class YoutubeApi {
         }
     }
 
+    /** v1.0.37: drop the cached visitor session + resolve caches.
+     * A visitorData can go stale/flagged after hours of use —
+     * YouTube then answers that session with stream-less responses
+     * (ANDROID 200 + zero formats, VISIONOS LOGIN_REQUIRED with the
+     * same visitorData) and the app stays stuck until a process
+     * restart. Clearing forces a fresh session on the next call.
+     * Used by the VISIONOS stale-session retry (via the field
+     * directly), the 403 re-resolve in MesuPlayer, and the manual
+     * "Lấy link mới" fix button. The urlCache is unused today (only
+     * directCache is read/written) but is cleared too so no stale
+     * entry can survive a session reset. */
+    public void clearSession() { clearSession(null); }
+    public void clearSession(String videoId) {
+        visitorData = "";
+        if (videoId == null || videoId.isEmpty()) {
+            directCache.clear();
+            urlCache.clear();
+        } else {
+            directCache.remove(videoId);
+            urlCache.remove(videoId);
+        }
+    }
+
     /** Does this player response carry a usable HLS manifest URL? */
     private static boolean hasHlsManifest(JSONObject r) {
         if (r == null) return false;
@@ -242,7 +265,18 @@ public class YoutubeApi {
      * LOGIN_REQUIRED with the same visitorData, a call 2 would be
      * identical — return the call-1 response and let the caller fall
      * through to Invidious. Throws on HTTP errors; the caller
-     * (resolveVisionosHls) converts that to null. */
+     * (resolveVisionosHls) converts that to null.
+     * v1.0.37: EXCEPTION to the above — a call 1 sent WITH a
+     * visitorData that comes back LOGIN_REQUIRED with the SAME
+     * visitorData and no manifest means the cached session is
+     * stale/flagged (proven live 2026-11-28 ~20:11: after ~2 h of
+     * use every track resolved to "[hls (invidious)]" only and every
+     * HLS load 403'd, while the same videos resolved fine from the
+     * VM). YouTube keeps answering that session with stream-less
+     * responses, so the app stays stuck until the process restarts.
+     * In that case clear the cached visitorData and retry ONCE from
+     * scratch (call 1 with no visitorData, then call 2 with the
+     * fresh data if offered). */
     private JSONObject innertubePlayerVisionOS(String videoId) throws Exception {
         String sentVd = visitorData; // what call 1 will send (may be "")
         JSONObject body = visionosBody(videoId, sentVd.isEmpty() ? null : sentVd);
@@ -255,6 +289,28 @@ public class YoutubeApi {
             JSONObject r2 = new JSONObject(fetchVisionos(body2.toString(), freshVd));
             updateVisitorData(r2);
             return r2;
+        }
+        // v1.0.37: call 1 was sent WITH a visitorData and came back
+        // LOGIN_REQUIRED with the SAME one and no manifest — the
+        // session is stale/flagged. Clear it and retry once from
+        // scratch; a second identical answer costs one more call and
+        // the caller still falls through to Invidious, so this can
+        // never make a resolve worse.
+        if (!sentVd.isEmpty() && freshVd.equals(sentVd)) {
+            StartupLog.log("Resolve " + videoId + " visionos: visitorData cu, lay moi");
+            visitorData = "";
+            JSONObject body3 = visionosBody(videoId, null);
+            JSONObject r3 = new JSONObject(fetchVisionos(body3.toString(), null));
+            updateVisitorData(r3);
+            if (hasHlsManifest(r3)) return r3;
+            String freshVd2 = visitorData;
+            if (!freshVd2.isEmpty()) {
+                JSONObject body4 = visionosBody(videoId, freshVd2);
+                JSONObject r4 = new JSONObject(fetchVisionos(body4.toString(), freshVd2));
+                updateVisitorData(r4);
+                return r4;
+            }
+            return r3;
         }
         return r;
     }
@@ -753,6 +809,22 @@ public class YoutubeApi {
                     cands.put(c);
                 }
             }
+            if (cands.length() == 0) {
+                // v1.0.37: the flagged-session signature is ANDROID 200
+                // with ZERO usable formats — no throw, so the old code
+                // logged nothing and the next diagnosis had no evidence
+                // (proven live 2026-11-28 ~20:11: every resolve returned
+                // "1 ung vien [hls (invidious)]" with no "visionos LOI"
+                // and no "Resolve LOI" anywhere). Record playability +
+                // format counts in one line.
+                JSONObject ps = r.optJSONObject("playabilityStatus");
+                JSONArray af = sd != null ? sd.optJSONArray("adaptiveFormats") : null;
+                JSONArray fm = sd != null ? sd.optJSONArray("formats") : null;
+                StartupLog.log("Resolve " + videoId + " android: 0 dinh dang, playability="
+                        + (ps == null ? "?" : ps.optString("status", "?"))
+                        + ", formats=" + (fm == null ? 0 : fm.length())
+                        + ", adaptive=" + (af == null ? 0 : af.length()));
+            }
             result.put("candidates", cands);
             // v1.0.31: VISIONOS HLS FIRST — the original Gathin mechanism
             // (decoded from tvhome-new.apk): two-call visitorData dance,
@@ -778,15 +850,30 @@ public class YoutubeApi {
                     c.put("source", "visionos");
                     merged.put(c);
                 }
+                // v1.0.37: Invidious progressive streams are kept as the
+                // LAST candidates even when its HLS is first. Before,
+                // the merge took only the HLS and dropped formatStreams,
+                // and with ANDROID returning zero candidates the list
+                // had a single entry — so the v1.0.35 runtime fallback
+                // had nothing to fall back to (proven live 2026-11-28
+                // ~20:11: every resolve was "1 ung vien [hls
+                // (invidious)]" and every track died on its 403).
+                JSONArray invProg = new JSONArray();
                 if (inv != null) {
                     JSONArray invCands = inv.optJSONArray("candidates");
                     if (invCands != null && invCands.length() > 0) {
                         JSONObject first = invCands.optJSONObject(0);
                         if (first != null && "hls".equals(first.optString("kind"))) {
                             merged.put(first); // second: Invidious HLS
+                            for (int i = 1; i < invCands.length(); i++) invProg.put(invCands.optJSONObject(i));
                         } else if (merged.length() == 0 && cands.length() == 0) {
                             // no visionos, no progressive: use Invidious as-is
                             for (int i = 0; i < invCands.length(); i++) merged.put(invCands.optJSONObject(i));
+                        } else {
+                            // no HLS from Invidious and the ANDROID (or
+                            // VISIONOS) list is non-empty: keep the
+                            // Invidious progressive streams as last resort
+                            for (int i = 0; i < invCands.length(); i++) invProg.put(invCands.optJSONObject(i));
                         }
                     }
                     if (result.optString("title", "").isEmpty()) {
@@ -794,6 +881,7 @@ public class YoutubeApi {
                     }
                 }
                 for (int i = 0; i < cands.length(); i++) merged.put(cands.optJSONObject(i));
+                for (int i = 0; i < invProg.length(); i++) merged.put(invProg.optJSONObject(i));
                 if (merged.length() > 0) { cands = merged; result.put("candidates", cands); }
             }
             // v1.0.36: signed-in candidates first, anonymous ladder after.
@@ -881,9 +969,12 @@ public class YoutubeApi {
                 // carries every quality incl. 1080p (verified live: the
                 // jkVlEvuGjg8 manifest has RESOLUTION=1920x1080 with
                 // absolute youtube.com variant URIs). formatStreams tops
-                // out at 720p and was EMPTY for the videos the user plays,
-                // so it is only a fallback when the instance returns no
-                // hlsUrl. "source" tags the candidate for the resolve log.
+                // out at 720p. v1.0.37: formatStreams are ALWAYS collected
+                // after the HLS (they used to be skipped whenever an
+                // hlsUrl existed) — they are the last-resort candidates
+                // that keep a track alive when every HLS 403s (the
+                // resolve() merge appends them LAST). "source" tags the
+                // candidate for the resolve log.
                 String hls = o.optString("hlsUrl", null);
                 if (hls != null && !hls.isEmpty()) {
                     JSONObject c = new JSONObject();
@@ -891,19 +982,18 @@ public class YoutubeApi {
                     c.put("kind", "hls");
                     c.put("source", "invidious");
                     cands.put(c);
-                } else {
-                    JSONArray fs = o.optJSONArray("formatStreams");
-                    if (fs != null) {
-                        for (int i = 0; i < fs.length(); i++) {
-                            JSONObject f = fs.optJSONObject(i);
-                            if (f.has("url")) {
-                                JSONObject c = new JSONObject();
-                                c.put("url", f.optString("url"));
-                                c.put("kind", "progressive");
-                                c.put("itag", f.optString("itag"));
-                                c.put("source", "invidious");
-                                cands.put(c);
-                            }
+                }
+                JSONArray fs = o.optJSONArray("formatStreams");
+                if (fs != null) {
+                    for (int i = 0; i < fs.length(); i++) {
+                        JSONObject f = fs.optJSONObject(i);
+                        if (f.has("url")) {
+                            JSONObject c = new JSONObject();
+                            c.put("url", f.optString("url"));
+                            c.put("kind", "progressive");
+                            c.put("itag", f.optString("itag"));
+                            c.put("source", "invidious");
+                            cands.put(c);
                         }
                     }
                 }

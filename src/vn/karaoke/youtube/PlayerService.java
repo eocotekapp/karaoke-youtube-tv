@@ -332,6 +332,95 @@ public class PlayerService extends Service {
         });
     }
 
+    /** v1.0.37: play a GIVEN candidate list (manual "Phát bản 360p"
+     * fix button — the caller resolved first and kept only the
+     * itag 18 candidate). Routed through playerAction like playNow. */
+    public void playCandidates(final LibraryState.Item it, final org.json.JSONArray cands) {
+        if (it == null || cands == null) return;
+        final String title = it.title == null ? "" : it.title;
+        playerAction("play360", new Runnable() {
+            @Override public void run() { if (player != null) player.playCandidates(it.id, title, cands); }
+        });
+        onStartedPlaying();
+    }
+
+    /** v1.0.37: manual "Đổi nguồn phát" (fix button) — advance to the
+     * next candidate of the current track. Returns false when there
+     * is no next candidate. Routed through playerAction (the
+     * main-thread choke point); MesuPlayer.nextCandidate() posts the
+     * advance itself. */
+    public boolean nextCandidate() {
+        if (player == null) return false;
+        final boolean[] ok = new boolean[1];
+        playerAction("nextsource", new Runnable() {
+            @Override public void run() { ok[0] = player.nextCandidate(); }
+        });
+        return ok[0];
+    }
+
+    /** v1.0.37: manual "Khởi động lại trình phát" (fix button).
+     * Releases the ExoPlayer and replays the current track from a
+     * fresh player (new resolve, new session). Runs through the
+     * playerAction choke point. Returns false when there is no
+     * current track (nothing to restart). The release + replay run
+     * in one main-thread runnable; if the replay itself fails, the
+     * player is NOT left permanently broken — every later play()
+     * re-runs ensurePlayer() and rebuilds the ExoPlayer. */
+    public boolean restartPlayer() {
+        final LibraryState.Item cur = library == null ? null : library.current();
+        if (cur == null || player == null) return false;
+        final String id = cur.id;
+        final String title = cur.title == null ? "" : cur.title;
+        playerAction("restartplayer", new Runnable() {
+            @Override public void run() {
+                try {
+                    player.release();
+                    resetStallPolls();
+                    player.play(id, title);
+                    StartupLog.log("Sua loi: restartplayer — phat lai " + id);
+                } catch (Throwable t) {
+                    StartupLog.log("Sua loi: restartplayer LOI: " + t);
+                }
+            }
+        });
+        onStartedPlaying();
+        return true;
+    }
+
+    /** v1.0.37: manual "Khởi động lại ứng dụng" (fix button) —
+     * restarts the whole app process (fresh visitorData + caches).
+     * The caller (RemoteServer /api/fix) answers the HTTP request
+     * FIRST; this only schedules the restart ~800 ms later so the
+     * reply flushes before the process dies. An AlarmManager intent
+     * relaunches KaraokeActivity ~1 s after the kill (belt and
+     * braces — the service is START_STICKY and restarts by itself);
+     * the queue + current index survive because LibraryState
+     * persists them in SharedPreferences on every mutation and
+     * reloads them in the constructor. The app does NOT auto-play
+     * after the restart (same as a boot restart) — the user presses
+     * play. NOTE: the Pinggy tunnel mints a NEW public URL on
+     * reconnect, so the panel must warn the user to re-scan the TV
+     * QR for the new panel link. */
+    public void restartApp() {
+        StartupLog.log("Sua loi: restartapp — khoi dong lai ung dung");
+        handler.postDelayed(new Runnable() {
+            @Override public void run() {
+                try {
+                    Intent ai = new Intent(PlayerService.this, KaraokeActivity.class);
+                    ai.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    PendingIntent pi = PendingIntent.getActivity(PlayerService.this, 0, ai,
+                            Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_ONE_SHOT | PendingIntent.FLAG_IMMUTABLE
+                                    : PendingIntent.FLAG_ONE_SHOT);
+                    android.app.AlarmManager am = (android.app.AlarmManager) getSystemService(Context.ALARM_SERVICE);
+                    if (am != null) am.set(android.app.AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, pi);
+                } catch (Throwable t) {
+                    StartupLog.log("Sua loi: restartapp dat lich LOI: " + t);
+                }
+                android.os.Process.killProcess(android.os.Process.myPid());
+            }
+        }, 800);
+    }
+
     // v1.0.24: PLAY-BG upload — delayed 2 s so the "Video overlay:" and
     // "Mo app:" lines land in the ring buffer before it is sent. One
     // Runnable; re-posting replaces the pending one (a second background

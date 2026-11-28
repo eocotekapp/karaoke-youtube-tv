@@ -156,6 +156,12 @@ public class MesuPlayer {
     private volatile boolean hlsProxyRetried = false;
     private volatile boolean hlsPlayedOnce = false;
 
+    /** v1.0.37: the one 403 re-resolve (see onPlayerError) was already
+     * used for this track. Per TRACK, not per candidate — reset in
+     * play() (new track) and stop(), never in buildSourceForCandidate
+     * (a fresh candidate list from the retry must not re-trigger it). */
+    private volatile boolean hls403Retried = false;
+
     /** v1.0.35: runtime candidate fallback (the proven-live bug:
      * prepareFromCandidates played the FIRST usable candidate and
      * broke — a "Source error" on it killed the track even though
@@ -254,6 +260,25 @@ public class MesuPlayer {
                 StartupLog.log("Video: " + videoSize.width + "x" + videoSize.height);
             }
             @Override public void onPlayerError(PlaybackException error) {
+                // v1.0.37 (403): a pre-first-frame HTTP 403 (manifest URL
+                // stale/expired, or the visitor session flagged — proven
+                // live 2026-11-28 ~20:11: direct HLS 403 AND the proxy
+                // retry 403 on every track after ~2 h of use). Retrying
+                // the same URL via the proxy is useless (it 403s too) —
+                // mint FRESH URLs instead: re-resolve the track once with
+                // a cleared session and replay from the fresh candidate
+                // list. One attempt only (hls403Retried); a second 403
+                // falls through to the proxy/candidate paths below.
+                // Mid-play errors (hlsPlayedOnce) never take this path.
+                if (!hlsPlayedOnce && !hls403Retried && isHttp403(error)) {
+                    hls403Retried = true;
+                    final String retryId = currentId;
+                    StartupLog.log("Phat " + currentId + ": 403, lay link moi");
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
+                        @Override public void run() { retryResolveAfter403(retryId); }
+                    });
+                    return;
+                }
                 // v1.0.31 (a): direct-then-proxy HLS retry (mirrors the
                 // original stage's [u, proxyUrl(u)] candidates). If the
                 // current track is a direct-HLS attempt that errored
@@ -320,6 +345,8 @@ public class MesuPlayer {
         hlsDirectUrl = null;
         hlsProxyRetried = false;
         hlsPlayedOnce = false;
+        // v1.0.37: fresh track — a later 403 still gets its one re-resolve.
+        hls403Retried = false;
         // v1.0.35: fresh track — no candidate list until resolve returns.
         trackCandidates = null;
         trackCandIndex = 0;
@@ -344,6 +371,35 @@ public class MesuPlayer {
             }
             }
         }).start();
+    }
+
+    /** v1.0.37: play a GIVEN candidate list for a track, without
+     * resolving (the manual "Phát bản 360p" fix button resolves
+     * first and hands over only the itag 18 candidate). Same state
+     * reset + logging as play(); the prepare is posted to the main
+     * looper exactly like play()'s resolver thread does. The
+     * hls403Retried flag is reset here too — this is a fresh play
+     * attempt for the track, so a later 403 still gets its one
+     * re-resolve. */
+    public synchronized void playCandidates(String videoId, String title, final JSONArray cands) {
+        ensurePlayer();
+        currentId = videoId;
+        currentTitle = title == null ? "" : title;
+        lastState = 3;
+        lastError = "";
+        lastPosMs = 0; lastDurMs = 0;
+        hlsDirectUrl = null;
+        hlsProxyRetried = false;
+        hlsPlayedOnce = false;
+        hls403Retried = false;
+        trackCandidates = null;
+        trackCandIndex = 0;
+        StartupLog.log("Phat: " + videoId + " '" + currentTitle + "' (chi phat tu danh sach co san)");
+        final JSONObject r = new JSONObject();
+        android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+        h.post(new Runnable() {
+            @Override public void run() { prepareFromCandidates(r, cands); }
+        });
     }
 
     /** v1.0.31: the proxy half of the direct-then-proxy HLS retry.
@@ -372,6 +428,76 @@ public class MesuPlayer {
             StartupLog.log("Phat " + currentId + " LOI prepare (proxy): " + e);
             LogUploader.send("PLAY-ERR");
         }
+    }
+
+    /** v1.0.37: is this error an HTTP 403 on the media load? The
+     * observed signature (PLAY-ERR uploads 2026-11-28 ~20:11) is
+     * type=SOURCE, code ERROR_CODE_IO_BAD_HTTP_STATUS, cause
+     * InvalidResponseCodeException "Response code: 403". Both halves
+     * are checked — a 403 buried in another error class must not
+     * trigger a re-resolve. */
+    private static boolean isHttp403(PlaybackException e) {
+        if (e == null) return false;
+        try {
+            if (!"ERROR_CODE_IO_BAD_HTTP_STATUS".equals(e.getErrorCodeName())) return false;
+        } catch (Exception ignored) { return false; }
+        Throwable c = e.getCause();
+        int n = 0;
+        while (c != null && n < 4) {
+            String m = c.getMessage();
+            if (m != null && m.contains("403")) return true;
+            c = c.getCause();
+            n++;
+        }
+        return false;
+    }
+
+    /** v1.0.37: the 403 re-resolve (posted from onPlayerError, runs
+     * on the main thread). Re-resolves the SAME track with a cleared
+     * session (fresh visitorData + fresh manifest URLs — the old URLs
+     * are what 403'd) and prepares from the fresh candidate list.
+     * The hls403Retried flag is NOT reset here (play() was not
+     * called), so a second 403 on the fresh list cannot loop back
+     * here — it falls through to the proxy/candidate paths. Drops
+     * the retry when the track is no longer current (the user moved
+     * on while the resolve was in flight). On resolve failure the
+     * normal PLAY-ERR path runs — the player is left idle, never
+     * stuck mid-retry. */
+    private synchronized void retryResolveAfter403(String videoId) {
+        if (player == null || videoId == null || !videoId.equals(currentId)) return;
+        PlayerService svc = PlayerService.getInstance();
+        if (svc != null) svc.resetStallPolls();
+        hlsDirectUrl = null;
+        hlsProxyRetried = false;
+        hlsPlayedOnce = false;
+        trackCandidates = null;
+        trackCandIndex = 0;
+        lastState = 3;
+        lastError = "";
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    YoutubeApi api = new YoutubeApi();
+                    api.clearSession(videoId);
+                    final JSONObject r = api.resolve(videoId);
+                    JSONArray cands = r.optJSONArray("candidates");
+                    if (cands == null || cands.length() == 0) throw new Exception("no stream");
+                    final JSONArray fcands = cands;
+                    android.os.Handler h = new android.os.Handler(android.os.Looper.getMainLooper());
+                    h.post(new Runnable() {
+                        @Override public void run() {
+                            if (!videoId.equals(currentId)) return;
+                            prepareFromCandidates(r, fcands);
+                        }
+                    });
+                } catch (Exception e) {
+                    lastState = -1;
+                    lastError = e.getMessage() == null ? "resolve failed" : e.getMessage();
+                    StartupLog.log("Phat " + videoId + " LOI resolve (403 retry): " + e);
+                    LogUploader.send("PLAY-ERR");
+                }
+            }
+        }).start();
     }
 
     /** v1.0.35: build the MediaSource for ONE candidate (index i of
@@ -475,6 +601,25 @@ public class MesuPlayer {
         }
     }
 
+    /** v1.0.37: manual "Đổi nguồn phát" (fix button) — advance to
+     * the next candidate of the CURRENT track, reusing the v1.0.35
+     * advanceToNextCandidate path (same staleness guard, same stall
+     * reset, same PLAY-ERR when the list is exhausted). Returns
+     * false at once when there is no next candidate (the panel then
+     * toasts "Hết nguồn khác để thử" and nothing changes). The
+     * advance itself is posted to the main looper; calling this from
+     * a pool thread is safe. */
+    public boolean nextCandidate() {
+        if (trackCandidates == null || trackCandIndex + 1 >= trackCandidates.length()) return false;
+        final String errId = currentId;
+        final JSONArray savedCands = trackCandidates;
+        final int failedIndex = trackCandIndex;
+        new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
+            @Override public void run() { advanceToNextCandidate(errId, savedCands, failedIndex, "doi nguon phat (thu cong)"); }
+        });
+        return true;
+    }
+
     private synchronized void prepareFromCandidates(JSONObject r, JSONArray cands) {
         if (player == null) return;
         // v1.0.31: a new prepare starts with no direct-HLS attempt in
@@ -508,6 +653,7 @@ public class MesuPlayer {
     public synchronized void stop() {
         if (player != null) { player.stop(); player.clearMediaItems(); }
         hlsDirectUrl = null; // v1.0.31: a stopped track has no retry pending
+        hls403Retried = false; // v1.0.37: a stopped track has no 403 retry pending
         trackCandidates = null; // v1.0.35: a stopped track has no fallback pending
         lastState = -1;
     }
