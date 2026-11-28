@@ -230,6 +230,19 @@ public class RemoteServer {
         return new LibraryState.Item(id, q.get("title"), q.get("channel"), dur);
     }
 
+    /** v1.0.26: route a player mutation through PlayerService.playerAction()
+     * (the main-thread choke point). The service-null fallback is direct —
+     * the same unreachable-in-practice pattern as playItem() (the service
+     * is set before server.start()). Direct MesuPlayer mutations from the
+     * HTTP layer were the bug: ExoPlayer throws "Player is accessed on the
+     * wrong thread" when called from a pool thread (proven live 2026-11-28
+     * 11:01 on /api/control?action=toggle and ?action=stop). */
+    private void controlPause() { if (service != null) service.pausePlayer(); else player.pause(); }
+    private void controlResume() { if (service != null) service.resumePlayer(); else player.resume(); }
+    private void controlStop() { if (service != null) service.stopPlayer(); else player.stop(); }
+    private void controlVolume(float v) { if (service != null) service.setPlayerVolume(v); else player.setVolume(v); }
+    private void controlSeek(long ms) { if (service != null) service.seekPlayer(ms); else player.seekTo(ms); }
+
     private void playItem(LibraryState.Item it) {
         if (it == null) return;
         library.recordPlay(it);
@@ -281,20 +294,20 @@ public class RemoteServer {
                 if (action == null) action = q.get("a");
                 if ("toggle".equals(action)) {
                     String st = player.getState();
-                    if (st.startsWith("1,")) player.pause();
+                    if (st.startsWith("1,")) controlPause();
                     // v1.0.25: resuming from the panel clears a previous
                     // Back-dismiss so the overlay video shows again (the
                     // endCheck poll re-shows it within ~3 s).
-                    else { player.resume(); if (service != null) service.clearVideoOverlayDismissed(); }
-                } else if ("pause".equals(action)) player.pause();
-                else if ("resume".equals(action) || "play".equals(action)) { player.resume(); if (service != null) service.clearVideoOverlayDismissed(); }
+                    else { controlResume(); if (service != null) service.clearVideoOverlayDismissed(); }
+                } else if ("pause".equals(action)) controlPause();
+                else if ("resume".equals(action) || "play".equals(action)) { controlResume(); if (service != null) service.clearVideoOverlayDismissed(); }
                 else if ("next".equals(action)) { LibraryState.Item n = library.next(); playItem(n); }
                 else if ("prev".equals(action)) { LibraryState.Item p = library.prev(); playItem(p); }
-                else if ("stop".equals(action)) player.stop();
+                else if ("stop".equals(action)) controlStop();
                 else if ("volume".equals(action)) {
-                    try { player.setVolume(Float.parseFloat(q.get("v")) / 100f); } catch (Exception ignored) { }
+                    try { controlVolume(Float.parseFloat(q.get("v")) / 100f); } catch (Exception ignored) { }
                 } else if ("seek".equals(action)) {
-                    try { player.seekTo(Long.parseLong(q.get("pos"))); } catch (Exception ignored) { }
+                    try { controlSeek(Long.parseLong(q.get("pos"))); } catch (Exception ignored) { }
                 } else if ("sleep".equals(action)) {
                     try { if (service != null) service.setSleepMinutes(Integer.parseInt(q.get("minutes"))); } catch (Exception ignored) { }
                 } else if ("remove".equals(action)) {
@@ -303,7 +316,14 @@ public class RemoteServer {
                     try { library.move(Integer.parseInt(q.get("from")), Integer.parseInt(q.get("to"))); } catch (Exception ignored) { }
                 } else if ("jump".equals(action)) {
                     try { int i = Integer.parseInt(q.get("index")); library.jumpTo(i); playItem(library.current()); } catch (Exception ignored) { }
-                } else if ("clear".equals(action)) { library.clearQueue(); player.stop(); }
+                } else if ("clear".equals(action)) { library.clearQueue(); controlStop(); }
+                // v1.0.26: let the listener-updated state settle before
+                // answering — setPlayWhenReady() notifies onIsPlayingChanged
+                // asynchronously on the main thread, so without this the
+                // reply could still show the old state code ("1" right
+                // after a pause). 300 ms is plenty and the panel is
+                // human-paced.
+                try { Thread.sleep(300); } catch (InterruptedException ignored) { }
                 sendJson(out, stateJson());
                 return;
             }

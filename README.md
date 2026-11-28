@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.25-pinggy (versionCode 26) · **APK:** `KaraokeYouTube.apk` — **2,769,370 bytes**
+**Version:** 1.0.26-pinggy (versionCode 27) · **APK:** `KaraokeYouTube.apk` — **2,773,467 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -231,6 +231,44 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   declining ("Để sau"), Back, or tap-outside all set the flag; no change
   was needed. The v1.0.23 full-screen intent and the `startActivity`
   attempt stay as secondary paths.
+- v1.0.26 (panel pause/stop main-thread fix, 2026-11-28): the panel's
+  pause/stop buttons were BROKEN — proven live 2026-11-28 11:01:
+  `/api/control?action=toggle` and `?action=stop` both answered
+  `{"error":"Player is accessed on the wrong thread. Current thread:
+  'pool-2-thread-10'. Expected thread: 'main'..."}`, state stayed
+  "1,0,0,0,0" — the video kept playing and the overlay kept covering the
+  screen, so the user could not even close the old app to install the new
+  one (the earlier "press Pause on the phone" workaround was dead on
+  arrival). Root cause, same class as the v1.0.15 stateJson bug but in the
+  CONTROL path: RemoteServer answers HTTP on a cached pool thread and its
+  control actions called `MesuPlayer.pause()/resume()/stop()/setVolume()/
+  seekTo()` directly on that thread; ExoPlayer 2.19.1 enforces
+  application-thread access. WHY playNow worked while toggle/stop threw
+  (traced end to end): `MesuPlayer.play()` never touches ExoPlayer
+  synchronously — it spawns a resolver thread and that thread posts
+  `prepareFromCandidates()` (setMediaSource/prepare/setPlayWhenReady) to
+  a main-looper Handler, so every real ExoPlayer call in the play path
+  lands on the main thread; the control methods call ExoPlayer
+  synchronously on the calling thread. FIX: `PlayerService.playerAction
+  (name, action)` is now THE single choke point for every player mutation
+  — off-main it logs `Dieu khien: <name> len main thread` (the proof
+  line), posts to the main handler and waits up to 3 s; on-main it runs
+  inline. Wrappers `pausePlayer()/resumePlayer()/stopPlayer()/
+  setPlayerVolume()/seekPlayer()` are the only way the HTTP layer
+  (`/api/control` toggle/pause/resume/stop/volume/seek, plus next/prev/
+  jump via `playItem` → `playNow`), the service internals (endCheck,
+  sleepCheck, onStartCommand STOP, overlay Back handler) and the
+  activity (D-pad, JS bridge — the bridge runs on a WebView thread) mutate
+  the player; even `playNow`'s `player.play()` goes through it. Direct
+  mutations remaining: `MesuPlayer.play()` itself (safe by construction),
+  the service-null defensive fallback in `playItem()`, `ensureSurface()`
+  (all callers main-thread), `getState()/getLastError()` (read-only,
+  v1.0.15), `release()` in `onDestroy` (teardown). The control endpoint
+  now also waits 300 ms after a mutation before answering, so the reply's
+  state reflects the listener-updated code (setPlayWhenReady notifies
+  asynchronously). GOOD NEWS, proven live in the same session: the v1.0.24
+  overlay fix works — "Video overlay: tao/hien" at 09:46:10 and 10:34:40,
+  PLAY-BG uploads arrived; not regressed by this build.
 - v1.0.22 (QR smaller while a video is playing, user asked 2026-11-28
   08:33 "Tôi cần QR bé hơn khi đang trong trình phát video"): while a video
   is playing (player state st==1 in "st,pos,dur,w,h,f") both QRs shrink to

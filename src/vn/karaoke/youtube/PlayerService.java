@@ -14,6 +14,8 @@ import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.view.KeyEvent;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
@@ -49,7 +51,7 @@ public class PlayerService extends Service {
         @Override public void run() {
             if (sleepDeadlineMs > 0 && System.currentTimeMillis() >= sleepDeadlineMs) {
                 sleepDeadlineMs = 0;
-                if (player != null) player.stop();
+                stopPlayer(); // v1.0.26: through the main-thread choke point
                 Toast.makeText(PlayerService.this, "Hết giờ hẹn — đã dừng phát", Toast.LENGTH_SHORT).show();
             } else if (sleepDeadlineMs > 0) {
                 handler.postDelayed(this, 15000);
@@ -77,7 +79,7 @@ public class PlayerService extends Service {
                         // v1.0.24: queue over -> stop + drop the overlay
                         // window (a black fullscreen overlay must never
                         // sit over the home screen when nothing plays).
-                        else { player.stop(); if (videoOverlayAdded) hideVideoOverlay(); }
+                        else { stopPlayer(); if (videoOverlayAdded) hideVideoOverlay(); }
                     } else if ((code == 3 || code == -1) && library != null && library.current() != null) {
                         stallPolls++;
                         if (stallPolls >= 10) { // ~30 s stuck
@@ -85,7 +87,7 @@ public class PlayerService extends Service {
                             StartupLog.log("Bai ket/loi, chuyen bai ke");
                             LibraryState.Item n = library.next();
                             if (n != null) playNow(n);
-                            else player.stop();
+                            else stopPlayer();
                         }
                     } else {
                         stallPolls = 0;
@@ -191,7 +193,7 @@ public class PlayerService extends Service {
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && "STOP".equals(intent.getAction())) {
-            if (player != null) player.stop();
+            stopPlayer(); // v1.0.26: through the main-thread choke point
         }
         return START_STICKY;
     }
@@ -221,6 +223,99 @@ public class PlayerService extends Service {
     /** v1.0.25: clear the Back-dismissed flag (new track / panel resume /
      * app-open). Idempotent. */
     public void clearVideoOverlayDismissed() { videoOverlayDismissedByUser = false; }
+
+    /**
+     * v1.0.26: THE single choke point for every player-touching call that
+     * originates off the main thread. WHY: RemoteServer answers HTTP on a
+     * cached pool thread (e.g. "pool-2-thread-10") and its /api/control
+     * actions called MesuPlayer.pause()/resume()/stop()/setVolume()/
+     * seekTo() DIRECTLY on that thread — ExoPlayer 2.19.1 enforces
+     * application-thread access and threw "Player is accessed on the wrong
+     * thread" (proven live 2026-11-28 11:01: /api/control?action=toggle
+     * and ?action=stop both answered {"error":"Player is accessed on the
+     * wrong thread..."}, state stayed "1,0,0,0,0" — the panel pause/stop
+     * buttons did NOTHING, so the user could not even close the old app
+     * to install the new one). Same class as the v1.0.15 stateJson bug,
+     * but in the CONTROL path.
+     *
+     * WHY playNow WORKED while toggle/stop threw (traced end to end, not
+     * guessed): MesuPlayer.play() never touches ExoPlayer synchronously —
+     * it sets fields, logs, spawns a resolver thread, and that thread
+     * posts prepareFromCandidates() (setMediaSource/prepare/
+     * setPlayWhenReady) to a main-looper Handler. Every real ExoPlayer
+     * call in the play path lands on the main thread. pause()/resume()/
+     * stop()/setVolume()/seekTo() call the ExoPlayer method synchronously
+     * on the calling thread, so from a pool thread they throw. getState()
+     * works from pool threads because v1.0.15 made it read
+     * listener-maintained lastState only (read-only, never throws) — it
+     * stays direct.
+     *
+     * MECHANISM: if already on the main looper, run inline. Otherwise log
+     * "Dieu khien: <name> len main thread" (the proof line), post to the
+     * main handler and wait up to 3 s for it to finish (pool threads may
+     * block — they are a cached pool; the main thread never blocks here
+     * because the inline path is taken). Every action is try/catch so a
+     * player failure can never kill the HTTP reply. The wrappers below
+     * (pausePlayer/resumePlayer/stopPlayer/setPlayerVolume/seekPlayer)
+     * are the only way the HTTP layer and the service internals mutate
+     * the player — RemoteServer, endCheck, sleepCheck, onStartCommand and
+     * the overlay Back handler all go through them; KaraokeActivity's
+     * D-pad / JS-bridge calls go through them too. Direct MesuPlayer
+     * mutations remaining: MesuPlayer.play() itself (safe by construction,
+     * see above — and playNow routes even that through here), the
+     * service-null defensive fallback in RemoteServer.playItem()
+     * (unreachable in practice: the service is set before server.start()),
+     * ensureSurface() (surface attach — all callers are main-thread UI /
+     * surface callbacks), getState()/getLastError() (read-only), and
+     * release() in onDestroy (teardown, main thread).
+     */
+    public void playerAction(final String name, final Runnable action) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            StartupLog.log("Dieu khien: " + name + " (da o main thread)");
+            try { action.run(); }
+            catch (Throwable t) { StartupLog.log("Dieu khien " + name + " LOI: " + t); }
+            return;
+        }
+        StartupLog.log("Dieu khien: " + name + " len main thread (tu " + Thread.currentThread().getName() + ")");
+        final CountDownLatch done = new CountDownLatch(1);
+        handler.post(new Runnable() {
+            @Override public void run() {
+                try { action.run(); }
+                catch (Throwable t) { StartupLog.log("Dieu khien " + name + " LOI: " + t); }
+                finally { done.countDown(); }
+            }
+        });
+        try { done.await(3000, TimeUnit.MILLISECONDS); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+    }
+
+    /** v1.0.26 wrappers — the only player mutations the HTTP layer and the
+     * service internals use. Null-safe; each logs through playerAction. */
+    public void pausePlayer() {
+        playerAction("pause", new Runnable() {
+            @Override public void run() { if (player != null) player.pause(); }
+        });
+    }
+    public void resumePlayer() {
+        playerAction("resume", new Runnable() {
+            @Override public void run() { if (player != null) player.resume(); }
+        });
+    }
+    public void stopPlayer() {
+        playerAction("stop", new Runnable() {
+            @Override public void run() { if (player != null) player.stop(); }
+        });
+    }
+    public void setPlayerVolume(final float v) {
+        playerAction("volume", new Runnable() {
+            @Override public void run() { if (player != null) player.setVolume(v); }
+        });
+    }
+    public void seekPlayer(final long ms) {
+        playerAction("seek", new Runnable() {
+            @Override public void run() { if (player != null) player.seekTo(ms); }
+        });
+    }
 
     // v1.0.24: PLAY-BG upload — delayed 2 s so the "Video overlay:" and
     // "Mo app:" lines land in the ring buffer before it is sent. One
@@ -309,7 +404,7 @@ public class PlayerService extends Service {
                                     StartupLog.log("Video overlay: an do Back");
                                     StartupLog.log("Video overlay: bi tat, khong hien lai");
                                     hideVideoOverlay();
-                                    if (player != null) player.pause();
+                                    pausePlayer(); // v1.0.26: through the choke point (already main thread — runs inline)
                                 } catch (Throwable t) {
                                     StartupLog.log("Video overlay: Back LOI: " + t);
                                 }
@@ -566,7 +661,16 @@ public class PlayerService extends Service {
             handler.removeCallbacks(bringToFrontCheck);
             handler.postDelayed(bringToFrontCheck, 1000);
         }
-        player.play(it.id, title);
+        // v1.0.26: even play() goes through the choke point — play() itself
+        // is safe from any thread (it defers all ExoPlayer calls to the
+        // main thread internally, see the playerAction comment), but the
+        // invariant is "no HTTP-origin call touches MesuPlayer except
+        // through playerAction()". From a pool thread this posts to main
+        // and waits (play() returns at once — it only starts the resolver
+        // thread); from the main thread (endCheck / D-pad) it runs inline.
+        playerAction("play", new Runnable() {
+            @Override public void run() { player.play(it.id, title); }
+        });
         onStartedPlaying();
     }
 

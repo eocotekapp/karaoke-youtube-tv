@@ -86,14 +86,16 @@ public class KaraokeActivity extends Activity {
         @JavascriptInterface public void stop() { svcPlayerDo("stop"); }
         @JavascriptInterface public void setVolume(float v) {
             PlayerService s = PlayerService.getInstance();
-            if (s != null) s.getPlayer().setVolume(v);
+            if (s != null) s.setPlayerVolume(v); // v1.0.26: choke point (JS bridge runs off the main thread)
         }
         private void svcPlayerDo(String what) {
             PlayerService s = PlayerService.getInstance();
             if (s == null) return;
-            if ("pause".equals(what)) s.getPlayer().pause();
-            else if ("resume".equals(what)) s.getPlayer().resume();
-            else if ("stop".equals(what)) s.getPlayer().stop();
+            // v1.0.26: through the main-thread choke point — the JS bridge
+            // runs on a WebView thread, not the main thread.
+            if ("pause".equals(what)) s.pausePlayer();
+            else if ("resume".equals(what)) s.resumePlayer();
+            else if ("stop".equals(what)) s.stopPlayer();
         }
     }
 
@@ -597,7 +599,7 @@ public class KaraokeActivity extends Activity {
                 case KeyEvent.KEYCODE_DPAD_CENTER:
                 case KeyEvent.KEYCODE_ENTER: {
                     String st = s.getPlayer().getState();
-                    if (st.startsWith("1,")) s.getPlayer().pause(); else s.getPlayer().resume();
+                    if (st.startsWith("1,")) s.pausePlayer(); else s.resumePlayer(); // v1.0.26: choke point
                     return true;
                 }
                 case KeyEvent.KEYCODE_DPAD_RIGHT: {
@@ -611,10 +613,10 @@ public class KaraokeActivity extends Activity {
                     return true;
                 }
                 case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
-                    s.getPlayer().resume();
+                    s.resumePlayer(); // v1.0.26: choke point
                     return true;
                 case KeyEvent.KEYCODE_MEDIA_PAUSE:
-                    s.getPlayer().pause();
+                    s.pausePlayer(); // v1.0.26: choke point
                     return true;
                 case KeyEvent.KEYCODE_MEDIA_NEXT: {
                     LibraryState.Item n = s.getLibrary().next();
