@@ -241,7 +241,7 @@ public class RemoteServer {
     private void route(String method, String path, Map<String, String> q,
                        Map<String, String> headers, String body, OutputStream out) throws Exception {
         switch (path) {
-            case "/":
+            case "/": sendHtml(out, PAGE); return; // v1.0.18: root serves the panel, not the bare stage (white page on phones)
             case "/stage": sendHtml(out, STAGE_HTML); return;
             case "/panel": sendHtml(out, PAGE); return;
             case "/api/state": sendJson(out, stateJson()); return;
@@ -526,7 +526,7 @@ public class RemoteServer {
         "const cur=s.current&&s.current.id?('▶ '+s.current.title):'Chưa phát bài nào';" +
         "document.getElementById('now').textContent=cur+(s.sleepMinutesLeft?' • Tắt sau '+s.sleepMinutesLeft+'p':'');" +
         "document.getElementById('queue').innerHTML=(s.queue||[]).map((v,i)=>\"<div class='item'>\"+(i===s.currentIndex?'▶ ':'')+v.title+\" <button onclick=\\\"jump(\"+i+\")\\\">Phát</button> <button onclick=\\\"rm(\"+i+\")\\\">Xóa</button></div>\").join('')||'Hàng đợi trống';" +
-        "document.getElementById('links').innerHTML='LAN: '+s.lanUrl+(s.pinggyUrl?'<br>Internet (Pinggy): '+s.pinggyUrl+' ('+s.pinggyState+')':'<br>Internet (Pinggy): '+s.pinggyState);" +
+        "document.getElementById('links').innerHTML='LAN: '+s.lanUrl+'/panel'+(s.pinggyUrl?'<br>Internet (Pinggy): '+s.pinggyUrl+'/panel ('+s.pinggyState+')':'<br>Internet (Pinggy): '+s.pinggyState);" +
         "document.getElementById('pg').textContent=s.pinggyState;" +
         "const pl=await api('/api/playlists');" +
         "document.getElementById('playlists').innerHTML=(pl.playlists||[]).map(p=>\"<div class='item'>\"+p.name+\" (\"+p.items.length+\") <button onclick=\\\"plPlay('\"+p.name+\"')\\\">Phát</button></div>\").join('')||'Chưa có playlist';}" +

@@ -381,7 +381,10 @@ public class KaraokeActivity extends Activity {
         return card;
     }
 
-    /** Pinggy URL only — hidden when the tunnel has no URL. Never the LAN URL. */
+    /** Pinggy URL only — hidden when the tunnel has no URL. Never the LAN URL.
+     * v1.0.18: the QR encodes the PANEL URL (publicUrl + "/panel"), not the
+     * bare root — "/" used to serve the bare transparent TV stage, which on
+     * a phone browser renders as a pure white blank page. */
     private void refreshQrCard() {
         if (qrCard == null) return;
         String url = "";
@@ -393,6 +396,7 @@ public class KaraokeActivity extends Activity {
             qrCard.setVisibility(View.GONE);
             return;
         }
+        url = url + "/panel";
         if (url.equals(currentQrUrl)) {
             if (qrCard.getVisibility() != View.VISIBLE) qrCard.setVisibility(View.VISIBLE);
             return;

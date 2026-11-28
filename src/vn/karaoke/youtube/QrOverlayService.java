@@ -288,7 +288,10 @@ public class QrOverlayService extends Service {
         refreshQr();
     }
 
-    /** Pinggy URL only. Empty URL -> hidden. Never the LAN URL. */
+    /** Pinggy URL only. Empty URL -> hidden. Never the LAN URL.
+     * v1.0.18: the QR encodes the PANEL URL (publicUrl + "/panel") — the
+     * bare root serves the transparent TV stage, which is a white blank
+     * page on a phone browser. */
     private void refreshQr() {
         if (card == null) return;
         String url = "";
@@ -300,6 +303,7 @@ public class QrOverlayService extends Service {
             card.setVisibility(View.GONE);
             return;
         }
+        url = url + "/panel";
         boolean isNew = !url.equals(currentUrl);
         if (isNew) {
             currentUrl = url;

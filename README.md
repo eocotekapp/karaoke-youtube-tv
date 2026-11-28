@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.17-pinggy (versionCode 18) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
+**Version:** 1.0.18-pinggy (versionCode 19) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -136,6 +136,19 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.18 (white control-panel page, user scanned the QR a dozen times and
+  his iPhone showed a pure white page, 2026-11-28 07:40): root cause — the QR
+  encoded the bare Pinggy root URL, and "/" served the bare transparent TV
+  stage (zero UI since v1.0.11), which on a phone browser renders as a white
+  blank page; the panel itself was fine at "/panel" (verified live: HTTP 200,
+  full HTML, /api/state full JSON). Fix: both QRs (in-activity card and
+  floating overlay) now encode publicUrl + "/panel"; "/" now serves the panel
+  PAGE too, so any old QR/link to the root also opens the panel; the panel's
+  links row now shows both URLs with the "/panel" suffix. "/stage" still
+  serves STAGE_HTML (the TV WebView loads stageUrl() = /stage explicitly).
+  QR capacity verified on the JVM: the longest real panel URL (80 chars,
+  IPv6-suffixed run.pinggy-free.link + /panel) encodes as QR v5 (37x37),
+  inside the v1-6 encoder — no capacity fix needed.
 - v1.0.17 (1080p60 + tighter QR card, user asked 2026-11-28 07:24 "Tao cần
   1080p60fps và làm gọn cái QR lại nền trắng đang bị rộng quá. Và chữ
   karaoke kéo sát vào QR đi cho tiết kiệm không gian"): (1) the frame-rate
