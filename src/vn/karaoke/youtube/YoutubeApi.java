@@ -315,21 +315,32 @@ public class YoutubeApi {
         return r;
     }
 
-    /** v1.0.31: VISIONOS HLS manifest URL for a video, or null.
-     * Never throws — any failure (HTTP error, no manifest, no
-     * visitorData) just means the caller falls through to Invidious. */
-    public String resolveVisionosHls(String videoId) {
+    /** v1.0.38: the VISIONOS player response itself (not just the HLS
+     * URL) — the quiet resolve needs videoDetails (title/author/
+     * lengthSeconds) from it so no ANDROID call is needed for
+     * metadata. Returns the response when it carries a usable HLS
+     * manifest, null otherwise. Never throws. */
+    public JSONObject resolveVisionosPlayer(String videoId) {
         try {
             JSONObject r = innertubePlayerVisionOS(videoId);
             if (hasHlsManifest(r)) {
                 String hls = r.optJSONObject("streamingData").optString("hlsManifestUrl");
                 StartupLog.log("Resolve " + videoId + " visionos: co hlsManifestUrl");
-                return hls;
+                return r;
             }
         } catch (Exception e) {
             StartupLog.log("Resolve " + videoId + " visionos LOI: " + e);
         }
         return null;
+    }
+
+    /** v1.0.31: VISIONOS HLS manifest URL for a video, or null.
+     * Never throws — any failure (HTTP error, no manifest, no
+     * visitorData) just means the caller falls through to Invidious. */
+    public String resolveVisionosHls(String videoId) {
+        JSONObject r = resolveVisionosPlayer(videoId);
+        if (r == null) return null;
+        return r.optJSONObject("streamingData").optString("hlsManifestUrl");
     }
 
     // ================= v1.0.36: signed-in InnerTube (own cookies) =================
@@ -750,12 +761,40 @@ public class YoutubeApi {
         } catch (Exception e) { return null; }
     }
 
+    public JSONObject resolve(String videoId) throws Exception {
+        return resolve(videoId, false);
+    }
+
     /**
      * Resolve a videoId to playable candidates.
      * Returns JSONObject: {id, title, durationMs, candidates:[{url, kind, proxied}]}
      * kind: "progressive" (direct mp4) or "hls" (manifest/.m3u8).
+     *
+     * v1.0.38 QUIET RESOLVE: VISIONOS FIRST. A normal track used to
+     * cost ~4 player-API calls (ANDROID + VISIONOS dance x2 +
+     * Invidious) even when the first one already had a usable 1080p
+     * manifest — and after Google flags the IP/session (user
+     * 2026-11-28 21:03: blocked after only 3-4 songs) every extra
+     * call is another fingerprint. Now: try VISIONOS first; when it
+     * returns a usable HLS manifest, SKIP the ANDROID player call
+     * AND the Invidious call for that track entirely — title/duration
+     * come from the VISIONOS player response's videoDetails, so no
+     * extra call is needed for metadata. A normal track costs ~1
+     * player API call instead of ~4. When VISIONOS fails, the ladder
+     * below runs unchanged (ANDROID -> Invidious -> progressive,
+     * with the v1.0.37 rules: fresh-visitorData retry in the dance,
+     * Invidious progressive always appended last). The dance is
+     * attempted ONCE per resolve() — the ladder reuses that attempt
+     * instead of dancing again (the dance already self-heals via the
+     * v1.0.37 fresh-visitorData retry, so a second identical dance
+     * adds calls without new information while Google is flagging
+     * the IP). fullLadder=true runs the OLD v1.0.37 ladder (ANDROID
+     * first, then VISIONOS + Invidious) — used ONLY by the manual
+     * "Phát bản 360p" fix, which needs the full candidate list to
+     * find itag 18 (the quiet path returns a single VISIONOS HLS
+     * candidate and has no progressive entry to force).
      */
-    public JSONObject resolve(String videoId) throws Exception {
+    public JSONObject resolve(String videoId, boolean fullLadder) throws Exception {
         String cached = getCached(directCache, videoId);
         if (cached != null) return new JSONObject(cached);
         JSONObject result = new JSONObject();
@@ -766,8 +805,37 @@ public class YoutubeApi {
         // exactly as in v1.0.35, and a signed-in candidate that fails at
         // playback still falls through to visionos/invidious at runtime
         // (v1.0.35 candidate fallback). NEVER fails a song because
-        // sign-in exists.
+        // sign-in exists. Dormant when unsigned (returns null, no network).
         JSONArray signedCands = resolveSignedIn(videoId);
+        // v1.0.38: VISIONOS first (quiet path — skipped for fullLadder).
+        String quietVisHls = null;
+        if (!fullLadder) {
+            JSONObject visResp = resolveVisionosPlayer(videoId);
+            if (visResp != null) {
+                String h = visResp.optJSONObject("streamingData").optString("hlsManifestUrl", null);
+                if (h != null && !h.isEmpty()) {
+                    quietVisHls = h;
+                    JSONObject vd = visResp.optJSONObject("videoDetails");
+                    if (vd != null) {
+                        result.put("title", vd.optString("title"));
+                        result.put("channel", vd.optString("author"));
+                        result.put("durationMs", vd.optLong("lengthSeconds") * 1000);
+                    }
+                    JSONArray cands = new JSONArray();
+                    JSONObject c = new JSONObject();
+                    c.put("url", quietVisHls);
+                    c.put("kind", "hls");
+                    c.put("source", "visionos");
+                    cands.put(c);
+                    result.put("candidates", cands);
+                    if (signedCands != null && signedCands.length() > 0) {
+                        cands = prepend(signedCands, cands);
+                        result.put("candidates", cands);
+                    }
+                }
+            }
+        }
+        if (quietVisHls == null) {
         try {
             JSONObject body = clientContext();
             body.put("videoId", videoId);
@@ -840,7 +908,12 @@ public class YoutubeApi {
             // signatureCipher (no poToken) — so this upgrade runs
             // whenever the best progressive is itag 18 (or none).
             if (cands.length() == 0 || bestIsItag18(cands)) {
-                String visHls = resolveVisionosHls(videoId);
+                // v1.0.38: reuse the VISIONOS attempt from above (quiet
+                // mode already danced once — do not dance again); the
+                // full-ladder mode never attempted it yet, so the
+                // ladder calls it here exactly as before.
+                String visHls = quietVisHls;
+                if (visHls == null && fullLadder) visHls = resolveVisionosHls(videoId);
                 JSONObject inv = hlsInvidious(videoId);
                 JSONArray merged = new JSONArray();
                 if (visHls != null) {
@@ -892,8 +965,10 @@ public class YoutubeApi {
         } catch (Exception e) {
             // ANDROID player call failed (network/cooling) — the VISIONOS
             // dance is a separate endpoint, so try it before Invidious.
+            // v1.0.38: reuse the attempt from above when it already ran.
             JSONArray fb = new JSONArray();
-            String visHls = resolveVisionosHls(videoId);
+            String visHls = quietVisHls;
+            if (visHls == null && fullLadder) visHls = resolveVisionosHls(videoId);
             if (visHls != null) {
                 JSONObject c = new JSONObject();
                 c.put("url", visHls);
@@ -916,6 +991,7 @@ public class YoutubeApi {
                 throw e;
             }
         }
+        } // end if (quietVisHls == null) — the quiet path skips the ladder
         if (result.optJSONArray("candidates") == null || result.optJSONArray("candidates").length() == 0) {
             JSONObject oe = oEmbedItem(videoId);
             if (oe != null) result.put("title", oe.optString("title", result.optString("title")));

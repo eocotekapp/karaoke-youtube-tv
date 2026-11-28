@@ -327,7 +327,7 @@ public class RemoteServer {
         // only as a defensive fallback when the service reference is null
         // (never in practice: PlayerService sets it before server.start()).
         if (service != null) {
-            service.playNow(it);
+            service.userPlayNow(it); // v1.0.38: manual play cancels any pending backoff wait
             return;
         }
         // Defensive fallback only (service is null): play directly.
@@ -665,7 +665,7 @@ public class RemoteServer {
                         if (cur == null) {
                             o.put("ok", false).put("message", "Không có bài đang phát");
                         } else {
-                            if (service != null) service.playNow(cur);
+                            if (service != null) service.userPlayNow(cur); // v1.0.38: manual fix cancels the backoff wait
                             else player.play(cur.id, cur.title == null ? "" : cur.title);
                             o.put("ok", true).put("message", "Đã lấy link mới, đang phát lại");
                         }
@@ -675,7 +675,11 @@ public class RemoteServer {
                         if (cur == null) {
                             o.put("ok", false).put("message", "Không có bài đang phát");
                         } else {
-                            JSONObject r = new YoutubeApi().resolve(cur.id);
+                            // v1.0.38: full ladder — the quiet resolve
+                            // returns a single VISIONOS HLS candidate and
+                            // has no itag 18 to force; this button needs
+                            // the full candidate list.
+                            JSONObject r = new YoutubeApi().resolve(cur.id, true);
                             JSONArray cands = r.optJSONArray("candidates");
                             JSONObject itag18 = null;
                             if (cands != null) {

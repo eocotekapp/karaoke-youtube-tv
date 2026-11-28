@@ -68,14 +68,31 @@ public class PlayerService extends Service {
     // or errored for ~30 s (10 consecutive 3 s polls) is skipped exactly
     // like an ended track. Paused (2) never counts as a stall.
     private int stallPolls = 0;
+    // v1.0.38: failure backoff — after Google flags the IP/session,
+    // the stall watchdog cycled the queue every ~30 s and every
+    // skipped track fired a fresh resolve storm (ANDROID + VISIONOS
+    // x2 + Invidious + proxy retry + re-resolve), which flags the IP
+    // even faster (user 2026-11-28 21:03: blocked after only 3-4
+    // songs). Count consecutive failed tracks; after 2 in a row wait
+    // 60 s before the next track, after 3+ wait 90 s (cap). The wait
+    // runs BEFORE advancing to the next track, not after. A manual
+    // panel play or fix button cancels the wait at once
+    // (cancelBackoff); a track that actually plays (state 1) or ends
+    // normally (state 0) resets the counter. The wait is a single
+    // handler.postDelayed — it always fires, never stalls forever.
+    private int consecutiveFailures = 0;
+    private boolean backoffPending = false;
+    private Runnable backoffAdvance = null;
     private final Runnable endCheck = new Runnable() {
         @Override public void run() {
             try {
                 if (player != null) {
                     String st = player.getState();
                     int code = Integer.parseInt(st.split(",")[0]);
-                    if (code == 0) { // ended
+                    if (code == 0) { // ended — a track that played to the end is a success
                         stallPolls = 0;
+                        if (backoffPending) cancelBackoff("bai vua het");
+                        consecutiveFailures = 0;
                         StartupLog.log("Bai vua het, chuyen bai ke");
                         LibraryState.Item n = library.next();
                         if (n != null) playNow(n);
@@ -84,16 +101,36 @@ public class PlayerService extends Service {
                         // sit over the home screen when nothing plays).
                         else { stopPlayer(); if (videoOverlayAdded) hideVideoOverlay(); }
                     } else if ((code == 3 || code == -1) && library != null && library.current() != null) {
-                        stallPolls++;
-                        if (stallPolls >= 10) { // ~30 s stuck
-                            stallPolls = 0;
-                            StartupLog.log("Bai ket/loi, chuyen bai ke");
-                            LibraryState.Item n = library.next();
-                            if (n != null) playNow(n);
-                            else stopPlayer();
+                        if (backoffPending) {
+                            // waiting out the backoff — do not count stall
+                            // polls, or the ~30 s clock would fire a
+                            // second advance mid-wait
+                        } else {
+                            stallPolls++;
+                            if (stallPolls >= 10) { // ~30 s stuck
+                                stallPolls = 0;
+                                consecutiveFailures++;
+                                int waitMs = consecutiveFailures >= 3 ? 90000
+                                        : consecutiveFailures == 2 ? 60000 : 0;
+                                if (waitMs > 0) {
+                                    StartupLog.log("Cho doi " + (waitMs / 1000) + "s sau "
+                                            + consecutiveFailures + " bai loi lien tiep");
+                                    scheduleBackoffAdvance(waitMs);
+                                } else {
+                                    StartupLog.log("Bai ket/loi, chuyen bai ke");
+                                    LibraryState.Item n = library.next();
+                                    if (n != null) playNow(n);
+                                    else stopPlayer();
+                                }
+                            }
                         }
                     } else {
                         stallPolls = 0;
+                        if (code == 1) {
+                            // a track is actually playing — the outage is over
+                            if (backoffPending) cancelBackoff("bai da phat duoc");
+                            consecutiveFailures = 0;
+                        }
                     }
                     // v1.0.24: overlay video follows the player state while
                     // the activity is in the background. Playing (1) with
@@ -118,6 +155,55 @@ public class PlayerService extends Service {
      * restarts the ~30 s stall clock so endCheck cannot skip the
      * track mid-fallback. Called from MesuPlayer's fallback paths. */
     public void resetStallPolls() { stallPolls = 0; }
+
+    /** v1.0.38: schedule the delayed queue advance after a backoff
+     * wait. The advance only runs when the failed track is still
+     * current — a manual play / pause / stop while waiting cancels
+     * the wait (cancelBackoff), and this check is belt and braces
+     * for anything that moved on without cancelling. */
+    private void scheduleBackoffAdvance(int waitMs) {
+        backoffPending = true;
+        final LibraryState.Item failed = library == null ? null : library.current();
+        backoffAdvance = new Runnable() {
+            @Override public void run() {
+                backoffPending = false;
+                backoffAdvance = null;
+                if (failed != null && library != null && library.current() != null
+                        && failed.id.equals(library.current().id)) {
+                    StartupLog.log("Het thoi gian cho — chuyen bai ke");
+                    LibraryState.Item n = library.next();
+                    if (n != null) playNow(n);
+                    else stopPlayer();
+                } else {
+                    StartupLog.log("Het thoi gian cho — bai da doi, khong chuyen nua");
+                }
+            }
+        };
+        handler.postDelayed(backoffAdvance, waitMs);
+    }
+
+    /** v1.0.38: cancel a pending backoff wait (manual play / fix /
+     * pause / stop, or a track that started playing after all).
+     * Safe to call when no wait is pending. handler.removeCallbacks
+     * is thread-safe, so pool-thread callers (RemoteServer) may call
+     * it directly. */
+    public void cancelBackoff(String reason) {
+        if (backoffAdvance != null) handler.removeCallbacks(backoffAdvance);
+        backoffAdvance = null;
+        if (backoffPending) {
+            backoffPending = false;
+            StartupLog.log("Huy cho doi (" + reason + ")");
+        }
+    }
+
+    /** v1.0.38: manual play from the panel — cancels any pending
+     * backoff wait first, then plays. The auto-advance paths
+     * (endCheck, the backoff Runnable itself) call playNow()
+     * directly and must NOT cancel. */
+    public void userPlayNow(LibraryState.Item it) {
+        cancelBackoff("phat thu cong");
+        playNow(it);
+    }
 
     @Override public void onCreate() {
         super.onCreate();
@@ -307,6 +393,7 @@ public class PlayerService extends Service {
     /** v1.0.26 wrappers — the only player mutations the HTTP layer and the
      * service internals use. Null-safe; each logs through playerAction. */
     public void pausePlayer() {
+        cancelBackoff("tam dung"); // v1.0.38: user intervened — no auto-advance after a pause
         playerAction("pause", new Runnable() {
             @Override public void run() { if (player != null) player.pause(); }
         });
@@ -317,6 +404,7 @@ public class PlayerService extends Service {
         });
     }
     public void stopPlayer() {
+        cancelBackoff("dung phat"); // v1.0.38: a stopped player must never be re-started by a pending advance
         playerAction("stop", new Runnable() {
             @Override public void run() { if (player != null) player.stop(); }
         });
@@ -337,6 +425,7 @@ public class PlayerService extends Service {
      * itag 18 candidate). Routed through playerAction like playNow. */
     public void playCandidates(final LibraryState.Item it, final org.json.JSONArray cands) {
         if (it == null || cands == null) return;
+        cancelBackoff("phat 360p"); // v1.0.38: manual fix — skip the wait at once
         final String title = it.title == null ? "" : it.title;
         playerAction("play360", new Runnable() {
             @Override public void run() { if (player != null) player.playCandidates(it.id, title, cands); }
@@ -351,6 +440,7 @@ public class PlayerService extends Service {
      * advance itself. */
     public boolean nextCandidate() {
         if (player == null) return false;
+        cancelBackoff("doi nguon"); // v1.0.38: manual fix — skip the wait at once
         final boolean[] ok = new boolean[1];
         playerAction("nextsource", new Runnable() {
             @Override public void run() { ok[0] = player.nextCandidate(); }
@@ -369,6 +459,7 @@ public class PlayerService extends Service {
     public boolean restartPlayer() {
         final LibraryState.Item cur = library == null ? null : library.current();
         if (cur == null || player == null) return false;
+        cancelBackoff("khoi dong lai trinh phat"); // v1.0.38: manual fix — skip the wait at once
         final String id = cur.id;
         final String title = cur.title == null ? "" : cur.title;
         playerAction("restartplayer", new Runnable() {
