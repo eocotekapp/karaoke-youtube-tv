@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.27-pinggy (versionCode 28) · **APK:** `KaraokeYouTube.apk` — **2,777,631 bytes**
+**Version:** 1.0.28-pinggy (versionCode 29) · **APK:** `KaraokeYouTube.apk` — **2,777,630 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -287,6 +287,14 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   unchanged. Rationale: 64dp = 128 physical px on this 320dpi box, ~2.8px
   per module for the v5 panel URL — still scannable from the couch, and
   half the Gathin original's 132dp.
+- v1.0.28 (TOKEN SWAP ONLY, 2026-11-28): the webhook.site log token
+  136db121… died ~11:38 (HTTP 429 "Request limit exceeded" — the free
+  token's 50-stored-request cap, confirmed by a test POST), so the app's
+  logs stopped arriving again while the app was still uploading. This
+  build swaps in the fresh token 3978eae9-eb51-442f-917c-dff22b438894
+  (minted 2026-11-28 11:40, expires ~2026-12-05) in `LogUploader.java`
+  (ENDPOINT + VIEW_URL) and bumps the version — NOTHING else changes: no
+  QR, panel, player, control or UpdateChecker change.
 - v1.0.27 (SELF-UPDATE, user asked 2026-11-28 11:22 "Tao muon no tu update
   khi co phien ban moi. Chu cu phai cai thu cong met lol ghe"): the app now
   updates itself — as far as a stock, unrooted box allows. HONEST LIMIT
