@@ -1,17 +1,11 @@
 package vn.karaoke.youtube;
 
-import android.app.ActivityManager;
-import android.app.AppOpsManager;
 import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
-import android.app.usage.UsageStats;
-import android.app.usage.UsageStatsManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.pm.PackageManager;
-import android.content.pm.ResolveInfo;
 import android.graphics.Bitmap;
 import android.graphics.PixelFormat;
 import android.graphics.drawable.GradientDrawable;
@@ -19,7 +13,6 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
-import android.os.Process;
 import android.provider.Settings;
 import android.util.DisplayMetrics;
 import android.util.TypedValue;
@@ -30,10 +23,6 @@ import android.view.WindowManager;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
-
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
 
 /**
  * Floating QR overlay — visible over ANY app and over the home screen/launcher.
@@ -51,26 +40,33 @@ import java.util.Set;
  * (The other Gathin QR, in the MesuSettings activity, is 190dp centred in a
  * settings screen — that is NOT the floating one, so it is not used here.)
  * This overlay reproduces that card's styling as its base size.
- * v1.0.20 (user, 2026-11-28): base size is now 96dp (not the Gathin 132dp)
+ * v1.0.20 (user, 2026-11-28): base size is 96dp (not the Gathin 132dp)
  * and the anchor is TOP-LEFT (not bottom-left) — the user wants the QR
  * smaller and at the top-left corner of the screen.
+ * v1.0.26 (user, 2026-11-28 — "Cai tv t co 300dp thoi" + "May dua a cai QR
+ * to the"): base size is now 64dp, playing 48dp. 64dp = 128 physical px on
+ * this 320dpi box, ~2.8px per module for the v5 panel URL — still scannable
+ * from the couch, and half the Gathin original's 132dp.
  *
- * HOME-SCREEN 3x RULE (user, 2026-11-27): the card is 3x the base size
- * (QR 288dp) ONLY while the foreground app is the launcher/home screen; in
- * any other app it returns to the base size (QR 96dp). Foreground
- * detection: UsageStatsManager first (needs usage-access grant, asked for on
- * the first-run screen), ActivityManager.getRunningAppProcesses as fallback.
- * v1.0.22: while a video is playing AND the activity is in the foreground,
- * the QR shrinks to 64dp (label 12sp) instead — the playing size wins over
- * the scale, so the card covers less of the video.
+ * HOME-SCREEN 3x RULE — REMOVED in v1.0.26. It used to grow the card to 3x
+ * (QR 288dp) while the launcher/home screen was in the foreground, via
+ * UsageStatsManager home detection (asked for on a one-time prompt in
+ * v1.0.24). The user's TV photo 2026-11-28 11:09 showed the card at ~0.32
+ * of the screen width — he hates it ("May dua a cai QR to the") and has
+ * asked for a SMALL QR twice already. The QR is now 64dp EVERYWHERE
+ * including the home screen; the 3x branch, the home detection and the
+ * usage-access prompt are all deleted, and PACKAGE_USAGE_STATS is gone
+ * from the manifest.
+ * v1.0.22: while a video is playing the QR shrinks to 48dp (label 12sp)
+ * instead of 64dp — the playing size wins over the tap toggle, so the
+ * card covers less of the video.
  *
  * TWO STATES ONLY (user rule, 2026-11-27):
  *   - Pinggy connected  -> QR visible, showing the CURRENT Pinggy public URL.
  *   - Pinggy down / reconnecting -> QR HIDDEN completely (never the LAN URL).
  * The QR updates automatically whenever Pinggy reconnects with a new URL.
  *
- * Touch: tap toggles a manual size override (flips large/small; auto mode
- * resumes when the foreground app changes); drag moves it to any corner;
+ * Touch: tap toggles small (64dp <-> 48dp); drag moves it to any corner;
  * long-press hides it until the next Pinggy URL change. On/off toggle in prefs
  * ("karaoke_overlay" / "overlay_enabled", also via /api/overlay).
  * QR is drawn by the hand-rolled QrMatrix encoder — no QR library bundled.
@@ -80,13 +76,12 @@ public class QrOverlayService extends Service {
 
     // --- Gathin original, MesuHome.build() (see class doc) ---
     // v1.0.20: base QR is 96dp (was the Gathin 132dp), top-left anchor.
-    private static final int GATHIN_QR_DP = 96;
-    // v1.0.22: while a video is playing AND the activity is in the
-    // foreground (the video is actually visible), the floating QR shrinks
-    // to 64dp (label 12sp) so it covers less of the video. Anywhere else
-    // (home screen / other apps) the 96dp base and the home-screen 3x rule
-    // are unchanged.
-    private static final int PLAYING_QR_DP = 64;
+    // v1.0.26: base QR is 64dp, playing 48dp (user: "Cai tv t co 300dp thoi").
+    private static final int GATHIN_QR_DP = 64;
+    // v1.0.22: while a video is playing the floating QR shrinks to 48dp
+    // (label 12sp) so it covers less of the video. Anywhere else it is the
+    // 64dp base. The home-screen 3x rule is GONE (v1.0.26).
+    private static final int PLAYING_QR_DP = 48;
     private static final int PLAYING_LABEL_SP = 12;
     private static final int CARD_PAD_SIDE_DP = 4; // v1.0.17: was 9 — white bg too wide
     private static final int CARD_PAD_BOTTOM_DP = 3; // v1.0.17: was 6
@@ -94,9 +89,8 @@ public class QrOverlayService extends Service {
     private static final int MARGIN_DP = 16;
     private static final int LABEL_SP = 16;
     private static final int LABEL_COLOR = 0xFF14213A;
-    private static final int HOME_SCALE = 3; // 96dp -> 288dp on the home screen
 
-    private static final long POLL_MS = 1500; // home detection + URL refresh
+    private static final long POLL_MS = 1500; // Pinggy URL refresh
 
     private WindowManager wm;
     private LinearLayout card;
@@ -108,12 +102,9 @@ public class QrOverlayService extends Service {
     private boolean userHidden = false;
     private boolean added = false;
     private boolean anchored = true; // top-left until the user drags
-    private Boolean manualLarge = null; // null = auto (home detection drives size)
-    private String lastForegroundPkg = null;
-    private int currentScale = 1;
-    private boolean playingShrunk = false; // v1.0.22: QR at 64dp while playing
+    private boolean manualSmall = false; // v1.0.26: tap toggles 64dp <-> 48dp
+    private boolean playingShrunk = false; // v1.0.22: QR at 48dp while playing
     private int screenW, screenH;
-    private Set<String> launcherPkgs = new HashSet<String>();
 
     // v1.0.24: static instance so PlayerService can bring the QR back on
     // top after adding the fullscreen video overlay (same-type windows
@@ -141,16 +132,6 @@ public class QrOverlayService extends Service {
         }
     }
 
-    /** True if the user granted usage access (needed for reliable home detection). */
-    public static boolean hasUsageAccess(Context ctx) {
-        if (Build.VERSION.SDK_INT < 21) return false;
-        try {
-            AppOpsManager ops = (AppOpsManager) ctx.getSystemService(Context.APP_OPS_SERVICE);
-            return ops != null && ops.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS,
-                    Process.myUid(), ctx.getPackageName()) == AppOpsManager.MODE_ALLOWED;
-        } catch (Exception e) { return false; }
-    }
-
     private int dp(int v) {
         return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
     }
@@ -174,7 +155,6 @@ public class QrOverlayService extends Service {
         DisplayMetrics dm = getResources().getDisplayMetrics();
         screenW = dm.widthPixels;
         screenH = dm.heightPixels;
-        launcherPkgs = resolveLauncherPackages();
 
         card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
@@ -249,10 +229,12 @@ public class QrOverlayService extends Service {
                             userHidden = true;
                             card.setVisibility(View.GONE);
                         } else if (!moved) {
-                            // tap: manual size override (flips large/small);
-                            // auto mode resumes when the foreground app changes
-                            manualLarge = !(currentScale == HOME_SCALE);
-                            applySize(manualLarge ? HOME_SCALE : 1);
+                            // v1.0.26: tap toggles small (64dp <-> 48dp).
+                            // The old manual 3x enlarge is gone with the
+                            // home-screen 3x rule — the QR never exceeds
+                            // 64dp anymore.
+                            manualSmall = !manualSmall;
+                            refreshQr();
                         }
                         return true;
                     }
@@ -267,7 +249,7 @@ public class QrOverlayService extends Service {
             stopSelf();
             return;
         }
-        applySize(1); // Gathin base size until home detection says otherwise
+        applySize(); // base 64dp (v1.0.26)
         handler = new Handler(Looper.getMainLooper());
         handler.post(tick);
     }
@@ -323,12 +305,6 @@ public class QrOverlayService extends Service {
     };
 
     private void tickOnce() {
-        // Foreground change clears the manual size override -> back to auto.
-        String fg = foregroundPackage();
-        if (fg != null && !fg.equals(lastForegroundPkg)) {
-            lastForegroundPkg = fg;
-            manualLarge = null;
-        }
         refreshQr();
     }
 
@@ -352,7 +328,7 @@ public class QrOverlayService extends Service {
         if (isNew) {
             currentUrl = url;
             userHidden = false; // a fresh tunnel re-shows the QR
-            Bitmap bmp = QrCode.bitmap(url, Math.max(512, dp(GATHIN_QR_DP * currentScale)));
+            Bitmap bmp = QrCode.bitmap(url, Math.max(512, dp(currentQrDp())));
             if (bmp != null) {
                 qrView.setImageBitmap(bmp);
                 StartupLog.log("QR noi: hien link " + url);
@@ -361,12 +337,18 @@ public class QrOverlayService extends Service {
         }
         if (userHidden) { card.setVisibility(View.GONE); return; }
         card.setVisibility(View.VISIBLE);
-        int want = targetScale();
-        boolean shrink = isPlayingInForeground();
-        if (want != currentScale || shrink != playingShrunk) {
+        // v1.0.26: shrink while playing, or tap-toggled small. No scale
+        // anymore — the QR is 64dp normally, 48dp while shrunk.
+        boolean shrink = isPlayingInForeground() || manualSmall;
+        if (shrink != playingShrunk) {
             playingShrunk = shrink;
-            applySize(want);
+            applySize();
         }
+    }
+
+    /** Current QR size in dp: 48 while shrunk, 64 otherwise. */
+    private int currentQrDp() {
+        return playingShrunk ? PLAYING_QR_DP : GATHIN_QR_DP;
     }
 
     /** v1.0.22: shrink only when the video is actually visible — the
@@ -375,8 +357,7 @@ public class QrOverlayService extends Service {
      * v1.0.24: also shrink while the video plays on the service-owned
      * overlay over the home screen / other apps — the user's v1.0.22 ask
      * was "QR smaller while a video is playing", the video can now play
-     * in the background too, and a 288dp home-screen QR would cover most
-     * of it. Sizes unchanged (64dp / 12sp). */
+     * in the background too. Sizes: 48dp / 12sp (v1.0.26: was 64dp). */
     private boolean isPlayingInForeground() {
         try {
             PlayerService svc0 = PlayerService.getInstance();
@@ -389,35 +370,25 @@ public class QrOverlayService extends Service {
         } catch (Throwable t) { return false; }
     }
 
-    /** 3x only on the home screen; base Gathin size in any other app. */
-    private int targetScale() {
-        if (manualLarge != null) return manualLarge ? HOME_SCALE : 1;
-        String fg = lastForegroundPkg != null ? lastForegroundPkg : foregroundPackage();
-        if (fg != null && launcherPkgs.contains(fg)) return HOME_SCALE;
-        return 1;
-    }
-
-    /** Resize the whole card (QR + padding + label scale together, Gathin ratio).
-     * v1.0.22: while playingShrunk the QR is 64dp with a 12sp label and
-     * base padding/radius — the playing size overrides the scale, so a
-     * manual 3x tap cannot blow the card up over the video. */
-    private void applySize(int scale) {
+    /** Resize the whole card (QR + padding + label together, Gathin ratio).
+     * v1.0.26: no scale anymore — the QR is 64dp normally, 48dp while
+     * shrunk (playing, or tap-toggled small); padding/radius are the base
+     * values either way, label 12sp while shrunk, 16sp otherwise. */
+    private void applySize() {
         if (card == null) return;
-        currentScale = scale;
-        int qr = playingShrunk ? PLAYING_QR_DP : GATHIN_QR_DP * scale;
-        int padScale = playingShrunk ? 1 : scale;
-        card.setPadding(dp(CARD_PAD_SIDE_DP * padScale), dp(CARD_PAD_SIDE_DP * padScale),
-                dp(CARD_PAD_SIDE_DP * padScale), dp(CARD_PAD_BOTTOM_DP * padScale));
+        int qr = currentQrDp();
+        card.setPadding(dp(CARD_PAD_SIDE_DP), dp(CARD_PAD_SIDE_DP),
+                dp(CARD_PAD_SIDE_DP), dp(CARD_PAD_BOTTOM_DP));
         GradientDrawable bg = (GradientDrawable) card.getBackground();
-        if (bg != null) bg.setCornerRadius(dp(CARD_RADIUS_DP * padScale));
+        if (bg != null) bg.setCornerRadius(dp(CARD_RADIUS_DP));
         LinearLayout.LayoutParams lp =
                 (LinearLayout.LayoutParams) qrView.getLayoutParams();
         lp.width = dp(qr);
         lp.height = dp(qr);
         qrView.setLayoutParams(lp);
         label.setTextSize(TypedValue.COMPLEX_UNIT_SP,
-                playingShrunk ? PLAYING_LABEL_SP : LABEL_SP * scale);
-        int w = dp(qr + 2 * CARD_PAD_SIDE_DP * padScale);
+                playingShrunk ? PLAYING_LABEL_SP : LABEL_SP);
+        int w = dp(qr + 2 * CARD_PAD_SIDE_DP);
         params.width = w;
         // Measure the real card height (QR + label + padding) before placing it.
         card.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
@@ -444,57 +415,6 @@ public class QrOverlayService extends Service {
         if (params.y < 0) params.y = 0;
         if (params.x > screenW - params.width) params.x = Math.max(0, screenW - params.width);
         if (params.y > screenH - params.height) params.y = Math.max(0, screenH - params.height);
-    }
-
-    /** Packages that can be the home screen (launcher). Resolved once. */
-    private Set<String> resolveLauncherPackages() {
-        Set<String> out = new HashSet<String>();
-        try {
-            Intent home = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME);
-            List<ResolveInfo> list = getPackageManager().queryIntentActivities(home, 0);
-            if (list != null) for (ResolveInfo ri : list) {
-                if (ri.activityInfo != null) out.add(ri.activityInfo.packageName);
-            }
-        } catch (Exception ignored) { }
-        return out;
-    }
-
-    /** Foreground package: UsageStatsManager first, running-process list fallback. */
-    private String foregroundPackage() {
-        if (Build.VERSION.SDK_INT >= 21) {
-            try {
-                if (hasUsageAccess(this)) {
-                    UsageStatsManager usm =
-                            (UsageStatsManager) getSystemService(Context.USAGE_STATS_SERVICE);
-                    if (usm != null) {
-                        long now = System.currentTimeMillis();
-                        List<UsageStats> stats = usm.queryUsageStats(
-                                UsageStatsManager.INTERVAL_DAILY, now - 60000, now);
-                        String best = null;
-                        long bestTime = 0;
-                        if (stats != null) for (UsageStats s : stats) {
-                            if (s.getLastTimeUsed() > bestTime) {
-                                bestTime = s.getLastTimeUsed();
-                                best = s.getPackageName();
-                            }
-                        }
-                        if (best != null) return best;
-                    }
-                }
-            } catch (Exception ignored) { }
-        }
-        try {
-            ActivityManager am = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-            if (am != null) {
-                List<ActivityManager.RunningAppProcessInfo> procs = am.getRunningAppProcesses();
-                if (procs != null) for (ActivityManager.RunningAppProcessInfo p : procs) {
-                    if (p.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND) {
-                        return p.processName;
-                    }
-                }
-            }
-        } catch (Exception ignored) { }
-        return null;
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {

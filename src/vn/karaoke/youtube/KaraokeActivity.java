@@ -48,10 +48,12 @@ public class KaraokeActivity extends Activity {
     // v1.0.13: in-activity QR card (Gathin original qrCard) — visible on the
     // TV screen itself, no permission needed. Pinggy URL only; hidden while
     // the tunnel is down/reconnecting. Polled every 2 s via stageHandler.
-    // v1.0.22: the QR shrinks while a video is playing (64dp + 12sp label),
-    // back to 96dp + 16sp when paused/idle — less of the video covered.
-    private static final int QR_DP_NORMAL = 96;
-    private static final int QR_DP_PLAYING = 64;
+    // v1.0.22: the QR shrinks while a video is playing (48dp + 12sp label),
+    // back to 64dp + 16sp when paused/idle — less of the video covered.
+    // v1.0.26: base 64dp (was 96dp), playing 48dp (was 64dp) — user: the TV
+    // is only 300dp, the QR was far too big.
+    private static final int QR_DP_NORMAL = 64;
+    private static final int QR_DP_PLAYING = 48;
     private static final int QR_LABEL_SP_NORMAL = 16;
     private static final int QR_LABEL_SP_PLAYING = 12;
     private LinearLayout qrCard;
@@ -229,7 +231,6 @@ public class KaraokeActivity extends Activity {
 
         loadStageWhenReady();
         maybePromptOverlay(); // v1.0.14: one-time overlay-permission prompt
-        maybePromptUsageAccess(); // v1.0.24: one-time usage-access prompt (home 3x)
         stageHandler.post(qrPoll); // in-activity QR card refresh (2 s)
         // v1.0.5: the app now sends its startup log to Mesu by itself
         // (LogUploader, webhook.site) ~6 s after launch — no photo needed.
@@ -286,44 +287,6 @@ public class KaraokeActivity extends Activity {
                     .show();
         } catch (Throwable t) {
             StartupLog.log(this, "Overlay prompt LOI: " + t);
-        }
-    }
-
-    /**
-     * v1.0.24: ONE-TIME usage-access prompt. The floating QR is supposed to
-     * grow 3x (288dp) on the home screen, but home detection can NEVER work
-     * without this grant: UsageStatsManager returns nothing unless the user
-     * grants usage access in Settings, and the ActivityManager fallback
-     * (getRunningAppProcesses) only ever returns this app's OWN processes
-     * on API 26+, so the launcher is never detected — the QR stayed 96dp
-     * on the home screen (user's TV photo 2026-11-28 09:18). Nothing in the
-     * app ever asked for it before. Modelled on maybePromptOverlay():
-     * small native dialog, dismissible, asked once ever, opens the
-     * Settings screen where the user flips the switch for Karaoke.
-     */
-    private void maybePromptUsageAccess() {
-        try {
-            if (QrOverlayService.hasUsageAccess(this)) return; // already granted
-            SharedPreferences prefs = getSharedPreferences("karaoke_prefs", MODE_PRIVATE);
-            if (prefs.getBoolean("usage_prompt_asked", false)) return;
-            prefs.edit().putBoolean("usage_prompt_asked", true).apply();
-            new AlertDialog.Builder(this)
-                    .setTitle("QR to gấp 3 ở màn hình chính?")
-                    .setMessage("Cho phép Karaoke xem app nào đang mở, để mã QR tự to lên gấp 3 khi ở màn hình chính cho dễ quét.")
-                    .setPositiveButton("Cho phép", new DialogInterface.OnClickListener() {
-                        @Override public void onClick(DialogInterface d, int which) {
-                            try {
-                                startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
-                            } catch (Exception e) {
-                                StartupLog.log(KaraokeActivity.this, "Mo man hinh usage-access LOI: " + e);
-                            }
-                        }
-                    })
-                    .setNegativeButton("Để sau", null)
-                    .setCancelable(true)
-                    .show();
-        } catch (Throwable t) {
-            StartupLog.log(this, "Usage prompt LOI: " + t);
         }
     }
 
@@ -407,6 +370,7 @@ public class KaraokeActivity extends Activity {
      * to open the phone panel. Hidden until a Pinggy URL exists.
      * v1.0.20 (user, 2026-11-28): QR is now 96dp and the card sits at the
      * TOP-LEFT corner (16dp margins) — smaller, out of the way of the video.
+     * v1.0.26: QR is 64dp (was 96dp), 48dp while playing (was 64dp).
      */
     private LinearLayout buildQrCard() {
         LinearLayout card = new LinearLayout(this);
@@ -417,8 +381,8 @@ public class KaraokeActivity extends Activity {
         bg.setCornerRadius(dp(12));
         card.setBackground(bg);
         // v1.0.17: tight card — padding 4dp sides/top, 3dp bottom (was 9/6);
-        // the white background was too wide. QR is 96dp (v1.0.20, was 132dp),
-        // 64dp while a video is playing (v1.0.22).
+        // the white background was too wide. QR is 64dp (v1.0.26, was 96dp),
+        // 48dp while a video is playing (v1.0.22, was 64dp).
         card.setPadding(dp(4), dp(4), dp(4), dp(3));
         qrImage = new ImageView(this);
         qrImage.setScaleType(ImageView.ScaleType.FIT_XY);
@@ -446,7 +410,7 @@ public class KaraokeActivity extends Activity {
 
     /** v1.0.22: is a video playing right now? st==1 in "st,pos,dur,w,h,f"
      * (MesuPlayer.lastState: 1 playing, 2 paused, 3 buffering, 0 ended).
-     * Never throws — any failure means "not playing" (96dp fallback). */
+     * Never throws — any failure means "not playing" (64dp fallback). */
     private boolean isPlayingNow() {
         try {
             PlayerService s = PlayerService.getInstance();
@@ -456,8 +420,8 @@ public class KaraokeActivity extends Activity {
         } catch (Throwable t) { return false; }
     }
 
-    /** v1.0.22: shrink the QR while a video is playing (64dp, label 12sp),
-     * back to 96dp / 16sp when paused or idle. Only re-applies on change;
+    /** v1.0.22: shrink the QR while a video is playing (48dp, label 12sp),
+     * back to 64dp / 16sp when paused or idle. Only re-applies on change;
      * the 512px bitmap + FIT_XY scale type stay — changing the ImageView
      * size is enough, the bitmap is never regenerated for a size change. */
     private void applyQrSize(boolean playing) {

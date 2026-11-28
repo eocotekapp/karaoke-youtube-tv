@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.26-pinggy (versionCode 27) · **APK:** `KaraokeYouTube.apk` — **2,773,467 bytes**
+**Version:** 1.0.26-pinggy (versionCode 27) · **APK:** `KaraokeYouTube.apk` — **2,769,372 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -55,15 +55,16 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   white card, corner radius 12 dp, padding 4 dp (sides/top) / 3 dp (bottom)
   since v1.0.17 (Gathin used 9/6 — the user asked for the white background
   to be tighter and the label pulled close under the QR),
-  QR image **132 dp** square, label "Karaoke" 16 sp colour #FF14213A, position
-  **bottom-LEFT, margins 16 dp** — that is the base size. **Home-screen 3x rule:**
-  only while the launcher/home screen is in the foreground the whole card grows
-  to 3x (QR 396 dp); in any other app it returns to the 132 dp Gathin size.
-  Foreground detection: UsageStatsManager first (usage-access grant, step 4 on
-  the first-run screen), `ActivityManager.getRunningAppProcesses` as fallback.
-  Tap toggles a manual size override (auto resumes when the foreground app
-  changes). (The other Gathin QR, 190 dp centred in the MesuSettings activity,
-  is a settings-screen QR, not the floating one.)
+  QR image **64 dp** square (v1.0.26, was 96 dp; Gathin used 132 dp),
+  label "Karaoke" 16 sp colour #FF14213A, position **top-LEFT, margins
+  16 dp**. While a video is playing the QR shrinks to **48 dp** (label
+  12 sp). Tap toggles small (64 dp <-> 48 dp); long-press hides it until
+  the next Pinggy URL change. The home-screen 3x enlargement is GONE
+  (removed v1.0.26 — the user hated the 288 dp card on his TV photo
+  2026-11-28 11:09; home detection and the usage-access prompt are deleted
+  too, and PACKAGE_USAGE_STATS is gone from the manifest). (The other
+  Gathin QR, 190 dp centred in the MesuSettings activity, is a
+  settings-screen QR, not the floating one.)
 - `BootReceiver` — `BOOT_COMPLETED` → starts `PlayerService` (→ RemoteServer 8792
   + Pinggy tunnel + overlay). No launcher coupling.
 
@@ -268,7 +269,24 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   state reflects the listener-updated code (setPlayWhenReady notifies
   asynchronously). GOOD NEWS, proven live in the same session: the v1.0.24
   overlay fix works — "Video overlay: tao/hien" at 09:46:10 and 10:34:40,
-  PLAY-BG uploads arrived; not regressed by this build.
+  PLAY-BG uploads arrived; not regressed by this build. (5) QR SMALLER +
+  HOME 3x REMOVED (user corrections 2026-11-28 11:09–11:10, same build):
+  "May dua a cai QR to the" — his TV photo showed the floating card at
+  ~0.32 of the screen width (288dp, the home 3x live for the first time
+  after the v1.0.24 usage-access prompt got granted); and "Cai tv t co
+  300dp thoi" — even the 96dp base would be a third of his screen in his
+  terms. So: the home-screen 3x enlargement is REMOVED entirely
+  (`HOME_SCALE` / `targetScale()` / home detection deleted, `QrOverlayService`
+  no longer touches UsageStatsManager at all), the one-time usage-access
+  prompt (`maybePromptUsageAccess()`) is deleted, and PACKAGE_USAGE_STATS
+  is removed from the manifest. Base QR is now **64dp** (was 96dp) on BOTH
+  QRs (floating overlay + in-activity card), playing **48dp** (was 64dp),
+  label 16sp / 12sp while playing, padding 4dp/3dp, radius 12dp, top-left
+  16dp, tap toggles small (64dp <-> 48dp), long-press hides, /api/overlay
+  on/off, Pinggy-only "/panel" content, hide-while-reconnecting — all
+  unchanged. Rationale: 64dp = 128 physical px on this 320dpi box, ~2.8px
+  per module for the v5 panel URL — still scannable from the couch, and
+  half the Gathin original's 132dp.
 - v1.0.22 (QR smaller while a video is playing, user asked 2026-11-28
   08:33 "Tôi cần QR bé hơn khi đang trong trình phát video"): while a video
   is playing (player state st==1 in "st,pos,dur,w,h,f") both QRs shrink to

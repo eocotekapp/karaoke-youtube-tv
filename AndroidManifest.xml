@@ -23,10 +23,6 @@
          silently dropped (see PlayerService). On API 30 this is granted by
          default; the declaration is for correctness. -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
-    <!-- Usage access (granted in Settings, not at install): lets the floating QR
-         know when the launcher/home screen is in the foreground so it can grow
-         3x there. Without it the overlay falls back to the running-process list. -->
-    <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS" />
 
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
