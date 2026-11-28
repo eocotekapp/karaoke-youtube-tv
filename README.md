@@ -319,10 +319,17 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   + one retry on JSON-parse failure — the v1.0.19 mechanism) wrapping every
   panel call; (2) a small "Hệ thống" footer card (self-update row + Bật/Tắt
   toggle, QR overlay Hiện/Ẩn, Pinggy restart) — the Gathin panel has none.
-  HONEST NOTE: the extracted original was TRUNCATED mid-script (ends
-  "...if(s&&s.ok){toa", no `</script></html>`, no delete-playlist handler,
-  no `refresh()` init) — the tail was reconstructed in the original's style
-  and 6 U+FFFD extraction-artifact chars in the paste toast were removed.
+  CORRECTION (same day, still v1.0.29 — never deployed): the tail is now
+  the TRUE original. The first extraction had sliced the dex string by
+  BYTES instead of UTF-16 units and cut ~468 chars off the tail, so the
+  first v1.0.29 build shipped a hand-reconstructed tail (bPlEnqAll toast
+  without s.count, bPlDel confirming with the playlist name, 5000 ms
+  poll) — replaced with the true tail (toast reads s.count, bPlDel
+  confirms 'Xoá playlist này?', refresh() + 2500 ms poll).
+  `/api/playlist-enqueue` now returns `{ok, count}` (the panel's toast
+  reads s.count). The "6 U+FFFD removed" note was wrong: the paste toast
+  genuinely contains the 🎶 emoji ('🎶 Đã thêm vào hàng chờ: '), stored
+  in the dex as a CESU-8 surrogate pair — it is original and preserved.
   Channel search/view stays cut in v1 (UI-only, empty results).
 - v1.0.28 (TOKEN SWAP ONLY, 2026-11-28): the webhook.site log token
   136db121… died ~11:38 (HTTP 429 "Request limit exceeded" — the free
