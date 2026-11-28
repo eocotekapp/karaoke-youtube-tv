@@ -60,6 +60,9 @@ import java.util.Set;
  * any other app it returns to the base size (QR 96dp). Foreground
  * detection: UsageStatsManager first (needs usage-access grant, asked for on
  * the first-run screen), ActivityManager.getRunningAppProcesses as fallback.
+ * v1.0.22: while a video is playing AND the activity is in the foreground,
+ * the QR shrinks to 64dp (label 12sp) instead — the playing size wins over
+ * the scale, so the card covers less of the video.
  *
  * TWO STATES ONLY (user rule, 2026-11-27):
  *   - Pinggy connected  -> QR visible, showing the CURRENT Pinggy public URL.
@@ -78,6 +81,13 @@ public class QrOverlayService extends Service {
     // --- Gathin original, MesuHome.build() (see class doc) ---
     // v1.0.20: base QR is 96dp (was the Gathin 132dp), top-left anchor.
     private static final int GATHIN_QR_DP = 96;
+    // v1.0.22: while a video is playing AND the activity is in the
+    // foreground (the video is actually visible), the floating QR shrinks
+    // to 64dp (label 12sp) so it covers less of the video. Anywhere else
+    // (home screen / other apps) the 96dp base and the home-screen 3x rule
+    // are unchanged.
+    private static final int PLAYING_QR_DP = 64;
+    private static final int PLAYING_LABEL_SP = 12;
     private static final int CARD_PAD_SIDE_DP = 4; // v1.0.17: was 9 — white bg too wide
     private static final int CARD_PAD_BOTTOM_DP = 3; // v1.0.17: was 6
     private static final int CARD_RADIUS_DP = 12;
@@ -101,6 +111,7 @@ public class QrOverlayService extends Service {
     private Boolean manualLarge = null; // null = auto (home detection drives size)
     private String lastForegroundPkg = null;
     private int currentScale = 1;
+    private boolean playingShrunk = false; // v1.0.22: QR at 64dp while playing
     private int screenW, screenH;
     private Set<String> launcherPkgs = new HashSet<String>();
 
@@ -322,7 +333,24 @@ public class QrOverlayService extends Service {
         if (userHidden) { card.setVisibility(View.GONE); return; }
         card.setVisibility(View.VISIBLE);
         int want = targetScale();
-        if (want != currentScale) applySize(want);
+        boolean shrink = isPlayingInForeground();
+        if (want != currentScale || shrink != playingShrunk) {
+            playingShrunk = shrink;
+            applySize(want);
+        }
+    }
+
+    /** v1.0.22: shrink only when the video is actually visible — the
+     * activity is in the foreground AND the player state is playing
+     * (st==1 in "st,pos,dur,w,h,f"). Null-safe, never throws. */
+    private boolean isPlayingInForeground() {
+        try {
+            if (!KaraokeActivity.isForeground) return false;
+            PlayerService svc = PlayerService.getInstance();
+            if (svc == null || svc.getPlayer() == null) return false;
+            String st = svc.getPlayer().getState();
+            return st != null && st.startsWith("1,");
+        } catch (Throwable t) { return false; }
     }
 
     /** 3x only on the home screen; base Gathin size in any other app. */
@@ -333,22 +361,27 @@ public class QrOverlayService extends Service {
         return 1;
     }
 
-    /** Resize the whole card (QR + padding + label scale together, Gathin ratio). */
+    /** Resize the whole card (QR + padding + label scale together, Gathin ratio).
+     * v1.0.22: while playingShrunk the QR is 64dp with a 12sp label and
+     * base padding/radius — the playing size overrides the scale, so a
+     * manual 3x tap cannot blow the card up over the video. */
     private void applySize(int scale) {
         if (card == null) return;
         currentScale = scale;
-        int qr = GATHIN_QR_DP * scale;
-        card.setPadding(dp(CARD_PAD_SIDE_DP * scale), dp(CARD_PAD_SIDE_DP * scale),
-                dp(CARD_PAD_SIDE_DP * scale), dp(CARD_PAD_BOTTOM_DP * scale));
+        int qr = playingShrunk ? PLAYING_QR_DP : GATHIN_QR_DP * scale;
+        int padScale = playingShrunk ? 1 : scale;
+        card.setPadding(dp(CARD_PAD_SIDE_DP * padScale), dp(CARD_PAD_SIDE_DP * padScale),
+                dp(CARD_PAD_SIDE_DP * padScale), dp(CARD_PAD_BOTTOM_DP * padScale));
         GradientDrawable bg = (GradientDrawable) card.getBackground();
-        if (bg != null) bg.setCornerRadius(dp(CARD_RADIUS_DP * scale));
+        if (bg != null) bg.setCornerRadius(dp(CARD_RADIUS_DP * padScale));
         LinearLayout.LayoutParams lp =
                 (LinearLayout.LayoutParams) qrView.getLayoutParams();
         lp.width = dp(qr);
         lp.height = dp(qr);
         qrView.setLayoutParams(lp);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, LABEL_SP * scale);
-        int w = dp((GATHIN_QR_DP + 2 * CARD_PAD_SIDE_DP) * scale);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP,
+                playingShrunk ? PLAYING_LABEL_SP : LABEL_SP * scale);
+        int w = dp(qr + 2 * CARD_PAD_SIDE_DP * padScale);
         params.width = w;
         // Measure the real card height (QR + label + padding) before placing it.
         card.measure(View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),

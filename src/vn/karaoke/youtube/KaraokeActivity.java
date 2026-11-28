@@ -48,8 +48,16 @@ public class KaraokeActivity extends Activity {
     // v1.0.13: in-activity QR card (Gathin original qrCard) — visible on the
     // TV screen itself, no permission needed. Pinggy URL only; hidden while
     // the tunnel is down/reconnecting. Polled every 2 s via stageHandler.
+    // v1.0.22: the QR shrinks while a video is playing (64dp + 12sp label),
+    // back to 96dp + 16sp when paused/idle — less of the video covered.
+    private static final int QR_DP_NORMAL = 96;
+    private static final int QR_DP_PLAYING = 64;
+    private static final int QR_LABEL_SP_NORMAL = 16;
+    private static final int QR_LABEL_SP_PLAYING = 12;
     private LinearLayout qrCard;
     private ImageView qrImage;
+    private TextView qrLabel;
+    private int currentQrDp = QR_DP_NORMAL;
     private String currentQrUrl = "";
     private final Runnable qrPoll = new Runnable() {
         @Override public void run() {
@@ -363,22 +371,23 @@ public class KaraokeActivity extends Activity {
         bg.setCornerRadius(dp(12));
         card.setBackground(bg);
         // v1.0.17: tight card — padding 4dp sides/top, 3dp bottom (was 9/6);
-        // the white background was too wide. QR is 96dp (v1.0.20, was 132dp).
+        // the white background was too wide. QR is 96dp (v1.0.20, was 132dp),
+        // 64dp while a video is playing (v1.0.22).
         card.setPadding(dp(4), dp(4), dp(4), dp(3));
         qrImage = new ImageView(this);
         qrImage.setScaleType(ImageView.ScaleType.FIT_XY);
-        qrImage.setLayoutParams(new LinearLayout.LayoutParams(dp(96), dp(96)));
+        qrImage.setLayoutParams(new LinearLayout.LayoutParams(dp(QR_DP_NORMAL), dp(QR_DP_NORMAL)));
         card.addView(qrImage);
-        TextView label = new TextView(this);
-        label.setText("Karaoke");
-        label.setTextColor(0xFF14213A);
-        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        label.setGravity(Gravity.CENTER);
+        qrLabel = new TextView(this);
+        qrLabel.setText("Karaoke");
+        qrLabel.setTextColor(0xFF14213A);
+        qrLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, QR_LABEL_SP_NORMAL);
+        qrLabel.setGravity(Gravity.CENTER);
         // v1.0.17: pull the label tight under the QR — no font padding, no
         // extra line spacing, so the card wastes no vertical space.
-        label.setIncludeFontPadding(false);
-        label.setLineSpacing(0, 1.0f);
-        card.addView(label);
+        qrLabel.setIncludeFontPadding(false);
+        qrLabel.setLineSpacing(0, 1.0f);
+        card.addView(qrLabel);
         card.setVisibility(View.GONE);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
@@ -389,12 +398,43 @@ public class KaraokeActivity extends Activity {
         return card;
     }
 
+    /** v1.0.22: is a video playing right now? st==1 in "st,pos,dur,w,h,f"
+     * (MesuPlayer.lastState: 1 playing, 2 paused, 3 buffering, 0 ended).
+     * Never throws — any failure means "not playing" (96dp fallback). */
+    private boolean isPlayingNow() {
+        try {
+            PlayerService s = PlayerService.getInstance();
+            if (s == null || s.getPlayer() == null) return false;
+            String st = s.getPlayer().getState();
+            return st != null && st.startsWith("1,");
+        } catch (Throwable t) { return false; }
+    }
+
+    /** v1.0.22: shrink the QR while a video is playing (64dp, label 12sp),
+     * back to 96dp / 16sp when paused or idle. Only re-applies on change;
+     * the 512px bitmap + FIT_XY scale type stay — changing the ImageView
+     * size is enough, the bitmap is never regenerated for a size change. */
+    private void applyQrSize(boolean playing) {
+        int wantDp = playing ? QR_DP_PLAYING : QR_DP_NORMAL;
+        if (wantDp == currentQrDp) return;
+        currentQrDp = wantDp;
+        LinearLayout.LayoutParams lp = (LinearLayout.LayoutParams) qrImage.getLayoutParams();
+        lp.width = dp(wantDp);
+        lp.height = dp(wantDp);
+        qrImage.setLayoutParams(lp);
+        if (qrLabel != null) qrLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP,
+                playing ? QR_LABEL_SP_PLAYING : QR_LABEL_SP_NORMAL);
+    }
+
     /** Pinggy URL only — hidden when the tunnel has no URL. Never the LAN URL.
      * v1.0.18: the QR encodes the PANEL URL (publicUrl + "/panel"), not the
      * bare root — "/" used to serve the bare transparent TV stage, which on
      * a phone browser renders as a pure white blank page. */
     private void refreshQrCard() {
         if (qrCard == null) return;
+        // v1.0.22: size follows the player — evaluated on every 2 s poll,
+        // so the QR shrinks within ~2 s of play and grows back on pause.
+        applyQrSize(isPlayingNow());
         String url = "";
         PlayerService svc = PlayerService.getInstance();
         if (svc != null && svc.getTunnel() != null) url = svc.getTunnel().getPublicUrl();

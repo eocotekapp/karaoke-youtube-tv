@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.21-pinggy (versionCode 22) · **APK:** `KaraokeYouTube.apk` — **2,769,373 bytes**
+**Version:** 1.0.22-pinggy (versionCode 23) · **APK:** `KaraokeYouTube.apk` — **2,769,373 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -136,6 +136,21 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.22 (QR smaller while a video is playing, user asked 2026-11-28
+  08:33 "Tôi cần QR bé hơn khi đang trong trình phát video"): while a video
+  is playing (player state st==1 in "st,pos,dur,w,h,f") both QRs shrink to
+  64dp with a 12sp label, and grow back to 96dp / 16sp when paused or idle.
+  In-activity card: `refreshQrCard()` (2 s poll) evaluates the player state
+  on every tick and only re-applies the ImageView size + label size on
+  change — the 512px bitmap + FIT_XY stay, so no bitmap regeneration.
+  Floating overlay: shrinks ONLY when the video is actually visible, i.e.
+  `KaraokeActivity.isForeground` (v1.0.21 flag) AND playing; on the home
+  screen / in other apps the 96dp base and the home-screen 3x rule (288dp)
+  are unchanged. In the overlay the playing size wins over the scale (a
+  manual 3x tap cannot blow the card up over the video). Both state reads
+  are null-safe / try-catch and fall back to 96dp on any error, so a bad
+  read can never hide the QR. Corner (top-left), padding, radius, Pinggy-
+  only "/panel" content and hide-while-reconnecting all unchanged.
 - v1.0.21 (video now brings the app to the front, user report 2026-11-28
   08:19 "qr ở ngoài màn hình chính hoặc trên bất kì app khác khi chọn phát
   video thì nó không mở. Mặc dù vẫn có tiếng"): the player lives in the
