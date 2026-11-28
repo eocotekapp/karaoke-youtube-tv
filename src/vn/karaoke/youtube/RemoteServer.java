@@ -142,6 +142,22 @@ public class RemoteServer {
             out.flush();
             sock.close();
         } catch (Exception e) {
+            // v1.0.15: never die silently — try to answer with a 500 JSON body
+            // so the caller (e.g. the phone panel) sees an error instead of a
+            // connection that just closes with no response.
+            try {
+                OutputStream out2 = sock.getOutputStream();
+                JSONObject err = new JSONObject();
+                String msg = e.getMessage();
+                err.put("error", msg == null ? e.toString() : msg);
+                byte[] body = err.toString().getBytes("UTF-8");
+                String head = "HTTP/1.1 500 OK\r\nContent-Type: application/json; charset=utf-8" +
+                        "\r\nContent-Length: " + body.length +
+                        "\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n";
+                out2.write(head.getBytes("UTF-8"));
+                out2.write(body);
+                out2.flush();
+            } catch (Exception ignored) { }
             try { sock.close(); } catch (Exception ignored) { }
         }
     }
@@ -174,24 +190,34 @@ public class RemoteServer {
         send(out, 200, "text/html; charset=utf-8", html.getBytes("UTF-8"));
     }
 
+    /** v1.0.15: each field is guarded on its own — one bad field can never
+     * blank the whole state again (before, a single exception anywhere made
+     * stateJson() return {} and the phone panel looked dead). */
     private JSONObject stateJson() {
+        JSONObject o = new JSONObject();
+        try { o.put("player", player.getState()); } catch (Exception e) { safePut(o, "player", "-1,0,0,0,0,"); }
+        try { o.put("error", player.getLastError()); } catch (Exception e) { safePut(o, "error", ""); }
         try {
-            JSONObject o = new JSONObject();
-            o.put("player", player.getState());
-            o.put("error", player.getLastError());
             LibraryState.Item cur = library.current();
             o.put("current", cur == null ? JSONObject.NULL : cur.toJson());
+        } catch (Exception e) { safePut(o, "current", JSONObject.NULL); }
+        try {
             JSONArray q = new JSONArray();
             for (LibraryState.Item it : library.queue) q.put(it.toJson());
             o.put("queue", q);
-            o.put("currentIndex", library.currentIndex);
-            o.put("lanUrl", lanUrl());
-            o.put("pinggyUrl", tunnel == null ? "" : tunnel.getPublicUrl());
-            o.put("pinggyState", tunnel == null ? "off" : tunnel.getState());
-            o.put("pinggyEnabled", tunnel != null && tunnel.isEnabled());
-            o.put("sleepMinutesLeft", service == null ? 0 : service.sleepMinutesLeft());
-            return o;
-        } catch (Exception e) { return new JSONObject(); }
+        } catch (Exception e) { safePut(o, "queue", new JSONArray()); }
+        try { o.put("currentIndex", library.currentIndex); } catch (Exception e) { safePut(o, "currentIndex", 0); }
+        try { o.put("lanUrl", lanUrl()); } catch (Exception e) { safePut(o, "lanUrl", ""); }
+        try { o.put("pinggyUrl", tunnel == null ? "" : tunnel.getPublicUrl()); } catch (Exception e) { safePut(o, "pinggyUrl", ""); }
+        try { o.put("pinggyState", tunnel == null ? "off" : tunnel.getState()); } catch (Exception e) { safePut(o, "pinggyState", "off"); }
+        try { o.put("pinggyEnabled", tunnel != null && tunnel.isEnabled()); } catch (Exception e) { safePut(o, "pinggyEnabled", false); }
+        try { o.put("sleepMinutesLeft", service == null ? 0 : service.sleepMinutesLeft()); } catch (Exception e) { safePut(o, "sleepMinutesLeft", 0); }
+        return o;
+    }
+
+    /** Best-effort put — never throws, so stateJson() always returns a full object. */
+    private static void safePut(JSONObject o, String key, Object value) {
+        try { o.put(key, value); } catch (Exception ignored) { }
     }
 
     private LibraryState.Item itemFromParams(Map<String, String> q) {

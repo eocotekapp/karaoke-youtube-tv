@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.14-pinggy (versionCode 15) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
+**Version:** 1.0.15-pinggy (versionCode 16) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -134,6 +134,24 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.15 (phone control panel dead, verified live against the user's box
+  through its Pinggy tunnel, 2026-11-28 07:10): `GET /api/state` returned
+  `{}` on every call and `/api/control?action=toggle` closed the connection
+  with no reply — so the panel showed "Chưa phát bài nào", "Hàng đợi trống",
+  "LAN: undefined", "Internet (Pinggy): undefined" and every control tap
+  looked dead (search and playlists still worked). Root cause:
+  `stateJson()` put `player.getState()` first and its catch returned an
+  empty JSONObject on ANY exception; `MesuPlayer.getState()` called
+  `player.getPlaybackState()` / `player.isPlaying()` without try/catch, and
+  ExoPlayer 2.19.1 throws `IllegalStateException` from those when called off
+  the application thread — RemoteServer answers from a pool thread. Fixes:
+  (1) `getState()` now uses only the listener-maintained `lastState` and is
+  wrapped in a whole-method try/catch — it can NEVER throw, from any thread.
+  (2) `stateJson()` guards EACH field in its own try/catch with a safe
+  default, so one bad field can never blank the whole state again.
+  (3) `RemoteServer.handle()`'s catch now tries to answer HTTP 500 with a
+  small JSON `{"error": "..."}` before closing the socket, so a failing
+  request never dies silently again.
 - v1.0.14 (three fixes from real-device logs, FPT Play 650, 2026-11-28
   07:06): (1) video capped at 1280x720 / 4.5 Mbps in the ExoPlayer
   `DefaultTrackSelector`, exactly like the original Gathin — the box decoder

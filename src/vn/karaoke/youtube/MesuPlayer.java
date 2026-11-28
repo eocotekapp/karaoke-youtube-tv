@@ -167,26 +167,31 @@ public class MesuPlayer {
         if (player != null) { player.release(); player = null; }
     }
 
-    /** "st,pos,dur,w,h,f" — same shape the stage JS expects from PX.getState(). */
+    /** "st,pos,dur,w,h,f" — same shape the stage JS expects from PX.getState().
+     * v1.0.15: NEVER throws, from ANY thread. ExoPlayer 2.19.1 throws
+     * IllegalStateException from getPlaybackState()/isPlaying() when called
+     * off the application thread — and RemoteServer answers /api/state from
+     * a pool thread, so the live calls killed the whole state reply ({}).
+     * The listener-maintained lastState is the state source now. */
     public synchronized String getState() {
-        if (player == null) return lastState + ",0,0,0,0,";
-        int w = 0, h = 0;
         try {
-            if (player.getVideoSize() != null) {
-                w = player.getVideoSize().width;
-                h = player.getVideoSize().height;
-            }
-        } catch (Exception ignored) { }
-        long pos = 0, dur = 0;
-        try { pos = player.getCurrentPosition(); dur = player.getDuration(); } catch (Exception ignored) { }
-        if (dur == C.TIME_UNSET) dur = 0;
-        int st = lastState;
-        if (player.getPlaybackState() == Player.STATE_ENDED) st = 0;
-        else if (player.isPlaying()) st = 1;
-        else if (player.getPlaybackState() == Player.STATE_BUFFERING) st = 3;
-        else if (player.getPlaybackState() == Player.STATE_READY) st = 2;
-        String f = (currentId == null ? "" : currentId) + "|" + (currentTitle == null ? "" : currentTitle);
-        return st + "," + pos + "," + dur + "," + w + "," + h + "," + f;
+            if (player == null) return lastState + ",0,0,0,0,";
+            int w = 0, h = 0;
+            try {
+                if (player.getVideoSize() != null) {
+                    w = player.getVideoSize().width;
+                    h = player.getVideoSize().height;
+                }
+            } catch (Exception ignored) { }
+            long pos = 0, dur = 0;
+            try { pos = player.getCurrentPosition(); dur = player.getDuration(); } catch (Exception ignored) { }
+            if (dur == C.TIME_UNSET) dur = 0;
+            int st = lastState;
+            String f = (currentId == null ? "" : currentId) + "|" + (currentTitle == null ? "" : currentTitle);
+            return st + "," + pos + "," + dur + "," + w + "," + h + "," + f;
+        } catch (Throwable t) {
+            return lastState + ",0,0,0,0,";
+        }
     }
 
     public String getCurrentId() { return currentId; }
