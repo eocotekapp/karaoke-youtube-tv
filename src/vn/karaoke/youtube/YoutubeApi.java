@@ -15,12 +15,23 @@ import java.util.List;
 /**
  * YouTube InnerTube client (custom, NOT SmartTube/NewPipe/ReVanced).
  * Primary: youtubei/v1/search + /player, client ANDROID.
+ * Resolve: VISIONOS HLS first (v1.0.31, the original Gathin mechanism),
+ * then Invidious HLS, then progressive itag 18 last.
  * Fallbacks: oEmbed + Invidious-compatible instances.
  * Clean rewrite from the behaviour spec.
  */
 public class YoutubeApi {
     public static final String UA = "com.google.android.youtube/21.26.364 (Linux; U; Android 11) gzip";
     public static final String CLIENT_VERSION = "21.26.364";
+    /** v1.0.31: VISIONOS client (the ORIGINAL Gathin mechanism, decoded
+     * from tvhome-new.apk classes3.dex YoutubeApi.innertubePlayer /
+     * playerBody / postJson). Safari UA + numeric client id 101.
+     * QUIRK (kept verbatim — verified live WITH it): osName/osVersion
+     * are "Android"/"11" even for VISIONOS (the original sets
+     * visionOS/26.5.23O471 first, then unconditionally overwrites
+     * with Android/11). */
+    public static final String VISIONOS_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
+    private static final String VISIONOS_CLIENT_VERSION = "1.02";
     private static final String[] INVIDIOUS = {
         "https://invidious.ducks.party",
         "https://invidious.materialio.us",
@@ -100,6 +111,139 @@ public class YoutubeApi {
             deadUntil = System.currentTimeMillis() + 60 * 1000;
             throw e;
         }
+    }
+
+    /** v1.0.31: POST to youtubei/v1/player as the VISIONOS client.
+     * Headers replicate the original Gathin call verbatim (decoded
+     * from tvhome-new.apk): Safari UA, X-YouTube-Client-Name "101",
+     * X-YouTube-Client-Version "1.02", X-Goog-Visitor-Id when a
+     * visitorData is supplied. NOTE: no X-Goog-Api-Format-Version
+     * here — the original does not send it on this path, and the
+     * live verification (2026-11-28) used exactly these headers. */
+    private String fetchVisionos(String postJson, String visitor) throws Exception {
+        URL url = new URL("https://www.youtube.com/youtubei/v1/player?prettyPrint=false");
+        HttpURLConnection c = (HttpURLConnection) url.openConnection();
+        c.setConnectTimeout(15000);
+        c.setReadTimeout(20000);
+        c.setRequestProperty("User-Agent", VISIONOS_UA);
+        c.setRequestProperty("Content-Type", "application/json");
+        c.setRequestProperty("X-YouTube-Client-Name", "101");
+        c.setRequestProperty("X-YouTube-Client-Version", VISIONOS_CLIENT_VERSION);
+        if (visitor != null && !visitor.isEmpty()) c.setRequestProperty("X-Goog-Visitor-Id", visitor);
+        c.setRequestMethod("POST");
+        c.setDoOutput(true);
+        byte[] b = postJson.getBytes("UTF-8");
+        c.setFixedLengthStreamingMode(b.length);
+        OutputStream os = c.getOutputStream();
+        os.write(b); os.flush(); os.close();
+        int code = c.getResponseCode();
+        InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+        if (in == null) throw new Exception("HTTP " + code);
+        BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
+        StringBuilder sb = new StringBuilder();
+        String line;
+        while ((line = r.readLine()) != null) sb.append(line).append('\n');
+        r.close();
+        if (code >= 400) throw new Exception("HTTP " + code + ": " + sb.toString());
+        return sb.toString();
+    }
+
+    /** v1.0.31: the VISIONOS player body, verbatim from the original
+     * (playerBody in the Gathin dex). visitorData is included in the
+     * client object only when non-null. The osName/osVersion quirk
+     * ("Android"/"11" for a VISIONOS client) is intentional — see the
+     * VISIONOS_UA comment above. */
+    private static JSONObject visionosBody(String videoId, String visitor) throws Exception {
+        JSONObject client = new JSONObject();
+        client.put("clientName", "VISIONOS");
+        client.put("clientVersion", VISIONOS_CLIENT_VERSION);
+        client.put("hl", "en");
+        client.put("gl", "US");
+        client.put("clientScreen", "WATCH");
+        client.put("deviceMake", "Apple");
+        client.put("deviceModel", "RealityDevice17,1");
+        client.put("osName", "Android");
+        client.put("osVersion", "11");
+        client.put("androidSdkVersion", 30);
+        client.put("userAgent", VISIONOS_UA);
+        if (visitor != null && !visitor.isEmpty()) client.put("visitorData", visitor);
+        JSONObject ctx = new JSONObject();
+        ctx.put("client", client);
+        JSONObject body = new JSONObject();
+        body.put("context", ctx);
+        body.put("videoId", videoId);
+        body.put("contentCheckOk", true);
+        body.put("racyCheckOk", true);
+        return body;
+    }
+
+    /** Refresh the cached visitorData from a player response (the
+     * original keeps it in a YoutubeApi field and reuses it). */
+    private void updateVisitorData(JSONObject r) {
+        if (r == null) return;
+        JSONObject vc = r.optJSONObject("responseContext");
+        if (vc != null) {
+            String vd = vc.optString("visitorData", "");
+            if (!vd.isEmpty()) visitorData = vd;
+        }
+    }
+
+    /** Does this player response carry a usable HLS manifest URL? */
+    private static boolean hasHlsManifest(JSONObject r) {
+        if (r == null) return false;
+        JSONObject sd = r.optJSONObject("streamingData");
+        if (sd == null) return false;
+        String hls = sd.optString("hlsManifestUrl", null);
+        return hls != null && !hls.isEmpty();
+    }
+
+    /** v1.0.31: the original Gathin two-call visitorData dance
+     * (innertubePlayer(videoId, VISIONOS=true) in the Gathin dex).
+     * Call 1 sends the cached visitorData when the instance has one
+     * (later resolves reuse it). If call 1 already returns a usable
+     * HLS manifest, use it — no forced call 2. Otherwise, if call 1
+     * yielded a FRESH visitorData (different from what call 1 sent),
+     * call 2 sends it (body + X-Goog-Visitor-Id header). Verified
+     * live 2026-11-28: call 1 without visitorData -> LOGIN_REQUIRED
+     * but responseContext carries visitorData; call 2 with it -> OK +
+     * hlsManifestUrl (manifest.googlevideo.com) + ALL adaptiveFormats
+     * with direct URLs (jkVlEvuGjg8 23/23, 4s7OVBc6HBo 30/30). If
+     * call 1 was sent WITH visitorData and still came back
+     * LOGIN_REQUIRED with the same visitorData, a call 2 would be
+     * identical — return the call-1 response and let the caller fall
+     * through to Invidious. Throws on HTTP errors; the caller
+     * (resolveVisionosHls) converts that to null. */
+    private JSONObject innertubePlayerVisionOS(String videoId) throws Exception {
+        String sentVd = visitorData; // what call 1 will send (may be "")
+        JSONObject body = visionosBody(videoId, sentVd.isEmpty() ? null : sentVd);
+        JSONObject r = new JSONObject(fetchVisionos(body.toString(), sentVd.isEmpty() ? null : sentVd));
+        updateVisitorData(r);
+        if (hasHlsManifest(r)) return r;
+        String freshVd = visitorData;
+        if (!freshVd.isEmpty() && !freshVd.equals(sentVd)) {
+            JSONObject body2 = visionosBody(videoId, freshVd);
+            JSONObject r2 = new JSONObject(fetchVisionos(body2.toString(), freshVd));
+            updateVisitorData(r2);
+            return r2;
+        }
+        return r;
+    }
+
+    /** v1.0.31: VISIONOS HLS manifest URL for a video, or null.
+     * Never throws — any failure (HTTP error, no manifest, no
+     * visitorData) just means the caller falls through to Invidious. */
+    public String resolveVisionosHls(String videoId) {
+        try {
+            JSONObject r = innertubePlayerVisionOS(videoId);
+            if (hasHlsManifest(r)) {
+                String hls = r.optJSONObject("streamingData").optString("hlsManifestUrl");
+                StartupLog.log("Resolve " + videoId + " visionos: co hlsManifestUrl");
+                return hls;
+            }
+        } catch (Exception e) {
+            StartupLog.log("Resolve " + videoId + " visionos LOI: " + e);
+        }
+        return null;
     }
 
     private JSONObject clientContext() throws Exception {
@@ -286,46 +430,68 @@ public class YoutubeApi {
                 }
             }
             result.put("candidates", cands);
-            // v1.0.30: InnerTube ANDROID only ever returns itag 18
-            // (640x360) with a playable URL — itag 22 is absent and every
-            // adaptiveFormat (137/299/136/140...) carries NEITHER url NOR
-            // signatureCipher (no poToken). So when the best progressive
-            // is itag 18 (or there is none), also ask Invidious and put
-            // its HLS manifest candidate FIRST — the manifest carries
-            // every quality incl. 1080p. Progressive stays after it as
-            // fallback, so a dead Invidious is no regression (360p as
-            // today). Verified live 2026-11-28: yt.chocolatemoo53.com
-            // /api/v1/videos/<id> returns hlsUrl whose master manifest
-            // has RESOLUTION=1920x1080 (jkVlEvuGjg8); the other two list
-            // hosts (ducks.party, materialio.us) returned HTTP 500.
+            // v1.0.31: VISIONOS HLS FIRST — the original Gathin mechanism
+            // (decoded from tvhome-new.apk): two-call visitorData dance,
+            // client 101 / 1.02, returns a real 16-variant HLS ladder
+            // with AVC 1080p/1080p60. Verified live 2026-11-28:
+            // jkVlEvuGjg8 -> AVC 1920x1080@24 (BANDWIDTH=4420108),
+            // 4s7OVBc6HBo -> AVC 1920x1080@60 (BANDWIDTH=6293353).
+            // Invidious HLS stays SECOND (v1.0.30), progressive itag 18
+            // LAST. A dead VISIONOS + dead Invidious is no regression
+            // (360p as today). InnerTube ANDROID only ever returns itag
+            // 18 (640x360) with a playable URL — itag 22 is absent and
+            // every adaptiveFormat carries NEITHER url NOR
+            // signatureCipher (no poToken) — so this upgrade runs
+            // whenever the best progressive is itag 18 (or none).
             if (cands.length() == 0 || bestIsItag18(cands)) {
+                String visHls = resolveVisionosHls(videoId);
                 JSONObject inv = hlsInvidious(videoId);
+                JSONArray merged = new JSONArray();
+                if (visHls != null) {
+                    JSONObject c = new JSONObject();
+                    c.put("url", visHls);
+                    c.put("kind", "hls");
+                    c.put("source", "visionos");
+                    merged.put(c);
+                }
                 if (inv != null) {
                     JSONArray invCands = inv.optJSONArray("candidates");
                     if (invCands != null && invCands.length() > 0) {
                         JSONObject first = invCands.optJSONObject(0);
                         if (first != null && "hls".equals(first.optString("kind"))) {
-                            JSONArray merged = new JSONArray();
-                            merged.put(first);
-                            for (int i = 0; i < cands.length(); i++) merged.put(cands.optJSONObject(i));
-                            cands = merged;
-                            result.put("candidates", cands);
-                        } else if (cands.length() == 0) {
-                            result.put("candidates", invCands);
-                            cands = invCands;
+                            merged.put(first); // second: Invidious HLS
+                        } else if (merged.length() == 0 && cands.length() == 0) {
+                            // no visionos, no progressive: use Invidious as-is
+                            for (int i = 0; i < invCands.length(); i++) merged.put(invCands.optJSONObject(i));
                         }
                     }
                     if (result.optString("title", "").isEmpty()) {
                         result.put("title", inv.optString("title", ""));
                     }
                 }
+                for (int i = 0; i < cands.length(); i++) merged.put(cands.optJSONObject(i));
+                if (merged.length() > 0) { cands = merged; result.put("candidates", cands); }
             }
         } catch (Exception e) {
+            // ANDROID player call failed (network/cooling) — the VISIONOS
+            // dance is a separate endpoint, so try it before Invidious.
+            JSONArray fb = new JSONArray();
+            String visHls = resolveVisionosHls(videoId);
+            if (visHls != null) {
+                JSONObject c = new JSONObject();
+                c.put("url", visHls);
+                c.put("kind", "hls");
+                c.put("source", "visionos");
+                fb.put(c);
+            }
             JSONObject inv = hlsInvidious(videoId);
             if (inv != null) {
                 result.put("title", inv.optString("title", ""));
-                result.put("candidates", inv.optJSONArray("candidates"));
-            } else {
+                JSONArray invCands = inv.optJSONArray("candidates");
+                if (invCands != null) for (int i = 0; i < invCands.length(); i++) fb.put(invCands.optJSONObject(i));
+            }
+            if (fb.length() > 0) { result.put("candidates", fb); }
+            else {
                 StartupLog.log("Resolve " + videoId + " LOI: " + e);
                 throw e;
             }
@@ -357,7 +523,7 @@ public class YoutubeApi {
             if (desc.length() > 0) desc.append(", ");
             desc.append(c.optString("kind"));
             if (c.has("itag")) desc.append(" itag").append(c.optString("itag"));
-            if ("invidious".equals(c.optString("source"))) desc.append(" (invidious)");
+            if (c.has("source")) desc.append(" (").append(c.optString("source")).append(")");
         }
         StartupLog.log("Resolve " + videoId + " OK: " + finalCands.length()
                 + " ung vien [" + desc + "], '" + result.optString("title") + "'");

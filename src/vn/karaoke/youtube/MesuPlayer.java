@@ -57,7 +57,9 @@ public class MesuPlayer {
      * jkVlEvuGjg8 has one variant (1920x1080) with absolute
      * youtube.com variant URIs, and its variant playlist lists 902
      * absolute googlevideo segment URIs — all three load kinds hit
-     * this factory. */
+     * this factory. v1.0.31: used ONLY by the one-shot direct->proxy
+     * HLS retry (retryHlsViaProxy); the first HLS attempt is direct
+     * via DIRECT_SAFARI_FACTORY. */
     private static final String PROXY_PREFIX = "http://127.0.0.1:8792/stream?u=";
     private static class ProxyHttpDataSource extends DefaultHttpDataSource {
         private Uri originalUri;
@@ -85,6 +87,33 @@ public class MesuPlayer {
         @Override public DataSource createDataSource() { return new ProxyHttpDataSource(); }
     };
 
+    /** v1.0.31: direct HLS loads use the ORIGINAL Gathin factory —
+     * DefaultHttpDataSource with the Safari UA (the original
+     * MesuPlayer$1.run built its HlsMediaSource exactly this way:
+     * Safari UA, cross-protocol redirects on, connect 15s, read 30s)
+     * and NO proxy rewrite. The proxy (PROXY_HTTP_FACTORY above)
+     * is only the second attempt — see onPlayerError +
+     * retryHlsViaProxy. */
+    private static final HttpDataSource.Factory DIRECT_SAFARI_FACTORY = new DefaultHttpDataSource.Factory()
+            .setUserAgent(YoutubeApi.VISIONOS_UA)
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15000)
+            .setReadTimeoutMs(30000);
+
+    /** v1.0.31: direct-then-proxy HLS retry state (per track).
+     * hlsDirectUrl = the raw manifest URL of the current direct-HLS
+     * attempt (null when the current track is not direct-HLS);
+     * hlsProxyRetried = the one proxy retry was already used;
+     * hlsPlayedOnce = the track reached READY/playing at least once
+     * (a later error is a playback problem, not a source-load
+     * problem, so it must NOT restart the track via proxy). All
+     * three are reset in play() for every new track; hlsDirectUrl is
+     * also cleared in stop(). Guarded by the player lock (all
+     * writes/reads happen on the main thread). */
+    private volatile String hlsDirectUrl = null;
+    private volatile boolean hlsProxyRetried = false;
+    private volatile boolean hlsPlayedOnce = false;
+
     public MesuPlayer(Context ctx) { this.ctx = ctx.getApplicationContext(); }
 
     public synchronized void ensurePlayer() {
@@ -111,16 +140,38 @@ public class MesuPlayer {
             @Override public void onPlaybackStateChanged(int state) {
                 if (state == Player.STATE_BUFFERING) lastState = 3;
                 else if (state == Player.STATE_ENDED) lastState = 0;
-                else if (state == Player.STATE_READY) lastState = player.getPlayWhenReady() ? 1 : 2;
+                else if (state == Player.STATE_READY) { lastState = player.getPlayWhenReady() ? 1 : 2; hlsPlayedOnce = true; }
                 else lastState = -1;
             }
             @Override public void onIsPlayingChanged(boolean isPlaying) {
+                if (isPlaying) hlsPlayedOnce = true;
                 lastState = isPlaying ? 1 : (player != null && player.getPlaybackState() == Player.STATE_READY ? 2 : lastState);
             }
             @Override public void onVideoSizeChanged(VideoSize videoSize) {
                 StartupLog.log("Video: " + videoSize.width + "x" + videoSize.height);
             }
             @Override public void onPlayerError(PlaybackException error) {
+                // v1.0.31: direct-then-proxy HLS retry (mirrors the
+                // original stage's [u, proxyUrl(u)] candidates). If the
+                // current track is a direct-HLS attempt that errored
+                // BEFORE ever reaching READY/playing, the load itself
+                // failed — retry ONCE via the /stream proxy. The retry
+                // is posted to the main looper and re-checks that the
+                // track is still current (retryHlsViaProxy compares u
+                // against hlsDirectUrl, which play() clears for a new
+                // track). No PLAY-ERR upload yet — the track is not
+                // dead until the proxy attempt also fails. A mid-play
+                // error (hlsPlayedOnce) or an already-retried track
+                // goes straight to the normal PLAY-ERR path below.
+                if (hlsDirectUrl != null && !hlsProxyRetried && !hlsPlayedOnce) {
+                    hlsProxyRetried = true;
+                    final String u = hlsDirectUrl;
+                    StartupLog.log("Phat " + currentId + ": hls truc tiep LOI, thu qua proxy: " + error.getMessage());
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
+                        @Override public void run() { retryHlsViaProxy(u); }
+                    });
+                    return;
+                }
                 lastState = -1;
                 lastError = error.getMessage() == null ? "playback error" : error.getMessage();
                 StartupLog.log("Phat LOI (" + currentId + " '" + currentTitle + "'): " + error);
@@ -140,6 +191,10 @@ public class MesuPlayer {
         currentTitle = title == null ? "" : title;
         lastState = 3;
         lastError = "";
+        // v1.0.31: fresh track — reset the direct-then-proxy HLS state.
+        hlsDirectUrl = null;
+        hlsProxyRetried = false;
+        hlsPlayedOnce = false;
         StartupLog.log("Phat: " + videoId + " '" + currentTitle + "'");
         new Thread(new Runnable() {
             @Override public void run() {
@@ -163,8 +218,36 @@ public class MesuPlayer {
         }).start();
     }
 
+    /** v1.0.31: the proxy half of the direct-then-proxy HLS retry.
+     * Runs on the main thread (posted from onPlayerError). Drops the
+     * retry when the track is no longer current — play() clears
+     * hlsDirectUrl for a new track, so a stale retry can never
+     * re-prepare an old URL over a new track. At most one proxy
+     * attempt per track (hlsProxyRetried is set before posting). If
+     * the proxy attempt also fails, onPlayerError takes the normal
+     * PLAY-ERR path (hlsProxyRetried is already true). */
+    private synchronized void retryHlsViaProxy(String u) {
+        if (player == null || u == null || !u.equals(hlsDirectUrl)) return;
+        try {
+            MediaItem item = MediaItem.fromUri(Uri.parse(u));
+            MediaSource source = new HlsMediaSource.Factory(PROXY_HTTP_FACTORY).createMediaSource(item);
+            player.setMediaSource(source);
+            player.prepare();
+            player.setPlayWhenReady(true);
+            StartupLog.log("Phat " + currentId + ": hls qua proxy, dang phat");
+        } catch (Exception e) {
+            lastState = -1;
+            lastError = e.getMessage() == null ? "prepare failed" : e.getMessage();
+            StartupLog.log("Phat " + currentId + " LOI prepare (proxy): " + e);
+            LogUploader.send("PLAY-ERR");
+        }
+    }
+
     private synchronized void prepareFromCandidates(JSONObject r, JSONArray cands) {
         if (player == null) return;
+        // v1.0.31: a new prepare starts with no direct-HLS attempt in
+        // flight; the HLS branch below sets hlsDirectUrl when it runs.
+        hlsDirectUrl = null;
         try {
             HttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
                     .setUserAgent(YoutubeApi.UA)
@@ -176,25 +259,35 @@ public class MesuPlayer {
                 String url = c.optString("url");
                 String kind = c.optString("kind");
                 if (url == null || url.isEmpty()) continue;
-                // Route through the local /stream proxy when the URL is a manifest
-                // or when direct playback is blocked (CORS/403 on googlevideo).
-                String playUrl = url;
-                if (url.contains("manifest") || url.contains(".m3u8") || url.contains("googlevideo.com")) {
-                    playUrl = "http://127.0.0.1:8792/stream?u=" +
-                            java.net.URLEncoder.encode(url, "UTF-8");
-                }
-                Uri uri = Uri.parse(playUrl);
-                MediaItem item = MediaItem.fromUri(uri);
                 if ("hls".equals(kind) || url.contains(".m3u8")) {
-                    // v1.0.30: HLS loads (manifest + variant playlists +
-                    // segments) all go through the /stream proxy via
-                    // PROXY_HTTP_FACTORY — the plain factory would fetch
-                    // variant playlists/segments direct from googlevideo.
-                    source = new HlsMediaSource.Factory(PROXY_HTTP_FACTORY).createMediaSource(item);
-                } else if (url.contains(".mpd")) {
-                    source = new DashMediaSource.Factory(http).createMediaSource(item);
+                    // v1.0.31: HLS plays DIRECT first (original Gathin
+                    // behaviour — Safari UA, no proxy). The item URI
+                    // stays RAW: the proxy factory rewrites it at open
+                    // time only if the one-shot retry fires (see
+                    // onPlayerError + retryHlsViaProxy). If the direct
+                    // load errors before first frame, the retry rebuilds
+                    // the same source with PROXY_HTTP_FACTORY.
+                    hlsDirectUrl = url;
+                    hlsProxyRetried = false;
+                    hlsPlayedOnce = false;
+                    MediaItem item = MediaItem.fromUri(Uri.parse(url));
+                    source = new HlsMediaSource.Factory(DIRECT_SAFARI_FACTORY).createMediaSource(item);
+                    StartupLog.log("Phat " + currentId + ": hls truc tiep");
                 } else {
-                    source = new ProgressiveMediaSource.Factory(http).createMediaSource(item);
+                    // Route through the local /stream proxy when the URL is a manifest
+                    // or when direct playback is blocked (CORS/403 on googlevideo).
+                    String playUrl = url;
+                    if (url.contains("manifest") || url.contains(".m3u8") || url.contains("googlevideo.com")) {
+                        playUrl = "http://127.0.0.1:8792/stream?u=" +
+                                java.net.URLEncoder.encode(url, "UTF-8");
+                    }
+                    Uri uri = Uri.parse(playUrl);
+                    MediaItem item = MediaItem.fromUri(uri);
+                    if (url.contains(".mpd")) {
+                        source = new DashMediaSource.Factory(http).createMediaSource(item);
+                    } else {
+                        source = new ProgressiveMediaSource.Factory(http).createMediaSource(item);
+                    }
                 }
                 break; // first usable candidate wins; stage watchdog advances on stall
             }
@@ -215,6 +308,7 @@ public class MesuPlayer {
     public synchronized void resume() { if (player != null) player.setPlayWhenReady(true); }
     public synchronized void stop() {
         if (player != null) { player.stop(); player.clearMediaItems(); }
+        hlsDirectUrl = null; // v1.0.31: a stopped track has no retry pending
         lastState = -1;
     }
     public synchronized void setVolume(float v) {

@@ -287,6 +287,55 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   unchanged. Rationale: 64dp = 128 physical px on this 320dpi box, ~2.8px
   per module for the v5 panel URL — still scannable from the couch, and
   half the Gathin original's 132dp.
+- v1.0.31 (1080p VIA ORIGINAL GATHIN VISIONOS HLS, 2026-11-28 — user:
+  "Bản Gathin cũ nó làm được nó phát được 1080p tại sao bản này lại không?"):
+  ROOT CAUSE (decoded from tvhome-new.apk classes3.dex
+  YoutubeApi.innertubePlayer/playerBody/postJson + classes4.dex
+  MesuPlayer$1.run): the ORIGINAL never used progressive itag 18 as
+  primary — its resolve chain is resolveCandidates -> resolvePiped ->
+  resolveInnertube -> innertubePlayer(videoId, VISIONOS=true), which
+  does TWO POSTs to youtubei/v1/player: call 1 without visitorData
+  returns playability LOGIN_REQUIRED but its responseContext carries
+  visitorData; call 2 WITH that visitorData returns playability OK +
+  streamingData.hlsManifestUrl + ALL adaptiveFormats with direct URLs.
+  Headers (verbatim): Safari UA, X-YouTube-Client-Name "101",
+  X-YouTube-Client-Version "1.02", X-Goog-Visitor-Id <visitorData> on
+  call 2. Body: VISIONOS/1.02, hl en, gl US, clientScreen WATCH,
+  deviceMake Apple, deviceModel RealityDevice17,1, contentCheckOk +
+  racyCheckOk true — with the QUIRK that osName/osVersion are
+  "Android"/"11" (the original sets visionOS/26.5.23O471 first, then
+  unconditionally overwrites with Android/11); verified live WITH the
+  quirk. FIX: `YoutubeApi.resolveVisionosHls()` implements the dance
+  (call 1 may reuse the cached instance visitorData; no forced call 2
+  when call 1 already returns a manifest; call 2 only on a FRESH
+  visitorData; never throws — failure falls through to Invidious);
+  resolve() now orders candidates visionos HLS -> invidious HLS ->
+  progressive itag 18 last (the ANDROID player call still runs for
+  title/duration; the catch path also tries VISIONOS before
+  Invidious). Playback mirrors the original: HLS plays DIRECT first
+  (Safari-UA DefaultHttpDataSource.Factory, 15s/30s timeouts), and on
+  a load error before first frame the player's error listener retries
+  ONCE via the /stream proxy (v1.0.30 ProxyHttpDataSource) — at most
+  once per track, stale retries dropped when a new track starts, and
+  a mid-play error never restarts the track. Verified live 2026-11-28:
+  jkVlEvuGjg8 call 2 -> OK, hlsManifestUrl on manifest.googlevideo.com,
+  23/23 adaptiveFormats with URLs, 16-variant ladder incl. AVC
+  1920x1080@24 (BANDWIDTH=4420108); 4s7OVBc6HBo -> 30/30 with URLs,
+  AVC 1920x1080@60 (BANDWIDTH=6293353). This is true adaptive
+  1080p/1080p60 — better than v1.0.30's Invidious single-variant
+  manifest (1440p60-only for 60fps videos). HLS-first resolves stay
+  uncached (manifest URLs expire). The resolve log now reads e.g.
+  "[hls (visionos), hls (invidious), progressive itag18]". HONEST
+  LIMITS: the Gathin APK on disk caps its own player at 1280x720 /
+  4.5 Mbps (decoded from its MesuPlayer.ensurePlayer), so THAT build
+  would render at most 720p despite the HLS ladder having 1080p — the
+  user's memory of 1080p on Gathin likely predates that cap. Our build
+  keeps the USER's cap (1920x1080, 12 Mbps, NO frame-rate cap — since
+  v1.0.17, untouched), so v1.0.31 genuinely plays 1080p/1080p60.
+  Needs YouTube to keep serving VISIONOS this way; VISIONOS-dead +
+  Invidious-down -> 360p. The box's decoder died once on 1080p60
+  (2026-11-28 07:04) — if it chokes again that is the decoder, not the
+  stream. Channel search still cut.
 - v1.0.30 (1080p VIA INVIDIOUS HLS, 2026-11-28 — user: "Nó không hề phát
   video ở 1080p"): ROOT CAUSE — InnerTube client ANDROID only ever returns
   itag 18 (640x360) with a playable URL (verified live: `formats` = [18]
