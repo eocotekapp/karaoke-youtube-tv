@@ -354,7 +354,9 @@ public class KaraokeActivity extends Activity {
         bg.setColor(0xFFFFFFFF);
         bg.setCornerRadius(dp(12));
         card.setBackground(bg);
-        card.setPadding(dp(9), dp(9), dp(9), dp(6));
+        // v1.0.17: tight card — padding 4dp sides/top, 3dp bottom (was 9/6);
+        // the white background was too wide. QR stays 132dp.
+        card.setPadding(dp(4), dp(4), dp(4), dp(3));
         qrImage = new ImageView(this);
         qrImage.setScaleType(ImageView.ScaleType.FIT_XY);
         qrImage.setLayoutParams(new LinearLayout.LayoutParams(dp(132), dp(132)));
@@ -364,6 +366,10 @@ public class KaraokeActivity extends Activity {
         label.setTextColor(0xFF14213A);
         label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
         label.setGravity(Gravity.CENTER);
+        // v1.0.17: pull the label tight under the QR — no font padding, no
+        // extra line spacing, so the card wastes no vertical space.
+        label.setIncludeFontPadding(false);
+        label.setLineSpacing(0, 1.0f);
         card.addView(label);
         card.setVisibility(View.GONE);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(

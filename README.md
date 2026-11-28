@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.16-pinggy (versionCode 17) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
+**Version:** 1.0.17-pinggy (versionCode 18) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -52,7 +52,9 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   Tunnel down/reconnecting → QR hidden completely until the new URL is ready.**
   Toggle: `/api/overlay?action=enable|disable` or the stage page.
   **Gathin ratio (measured from tvhome-new.apk, classes5.dex, MesuHome.build()):**
-  white card, corner radius 12 dp, padding 9 dp (sides/top) / 6 dp (bottom),
+  white card, corner radius 12 dp, padding 4 dp (sides/top) / 3 dp (bottom)
+  since v1.0.17 (Gathin used 9/6 — the user asked for the white background
+  to be tighter and the label pulled close under the QR),
   QR image **132 dp** square, label "Karaoke" 16 sp colour #FF14213A, position
   **bottom-LEFT, margins 16 dp** — that is the base size. **Home-screen 3x rule:**
   only while the launcher/home screen is in the foreground the whole card grows
@@ -134,6 +136,21 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.17 (1080p60 + tighter QR card, user asked 2026-11-28 07:24 "Tao cần
+  1080p60fps và làm gọn cái QR lại nền trắng đang bị rộng quá. Và chữ
+  karaoke kéo sát vào QR đi cho tiết kiệm không gian"): (1) the frame-rate
+  cap is REMOVED (`setMaxVideoFrameRate` gone) and the bitrate cap raised to
+  12 Mbps (was 8) — 1080p60 YouTube variants run ~8-12 Mbps, so 1080p60
+  stays selectable; max size stays 1920x1080. Honest note: the box decoder
+  DID die once on a 1080p60 segment (log 2026-11-28 07:04:48), but the user
+  explicitly demands 60fps, so no cap is re-imposed. (2) Both QR cards
+  tightened the same way — card padding 9dp sides/top + 6dp bottom is now
+  4dp + 3dp, and the "Karaoke" label sits tight under the QR
+  (`setIncludeFontPadding(false)`, line spacing 0 / 1.0x). QR stays 132dp,
+  label 16sp 0xFF14213A, radius 12dp, bottom-left 16dp margins; the
+  floating card's home-screen 3x scaling multiplies the new smaller
+  padding as before. `QrCode.bitmap()` already uses a 2-module quiet zone
+  (same as the Gathin original), so it was left alone.
 - v1.0.16 (default video quality 1080p, user asked 2026-11-28 07:19 "T cần
   mặc định 1080"): the `DefaultTrackSelector` cap is now max 1920x1080,
   max 30 fps (`setMaxVideoFrameRate(30)`), max 8 Mbps. v1.0.14's 720p cap

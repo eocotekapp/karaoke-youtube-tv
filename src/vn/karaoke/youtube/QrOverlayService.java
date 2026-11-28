@@ -74,8 +74,8 @@ public class QrOverlayService extends Service {
 
     // --- Gathin original, MesuHome.build() (see class doc) ---
     private static final int GATHIN_QR_DP = 132;
-    private static final int CARD_PAD_SIDE_DP = 9;
-    private static final int CARD_PAD_BOTTOM_DP = 6;
+    private static final int CARD_PAD_SIDE_DP = 4; // v1.0.17: was 9 — white bg too wide
+    private static final int CARD_PAD_BOTTOM_DP = 3; // v1.0.17: was 6
     private static final int CARD_RADIUS_DP = 12;
     private static final int MARGIN_DP = 16;
     private static final int LABEL_SP = 16;
@@ -175,6 +175,9 @@ public class QrOverlayService extends Service {
         label.setTextColor(LABEL_COLOR);
         label.setTextSize(TypedValue.COMPLEX_UNIT_SP, LABEL_SP);
         label.setGravity(Gravity.CENTER);
+        // v1.0.17: pull the label tight under the QR (same as the in-activity card).
+        label.setIncludeFontPadding(false);
+        label.setLineSpacing(0, 1.0f);
         card.addView(label);
 
         card.setVisibility(View.GONE); // hidden until a Pinggy URL exists
