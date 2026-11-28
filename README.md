@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.19-pinggy (versionCode 20) · **APK:** `KaraokeYouTube.apk` — **2,769,371 bytes**
+**Version:** 1.0.20-pinggy (versionCode 21) · **APK:** `KaraokeYouTube.apk` — **2,769,373 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -136,6 +136,16 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.20 (smaller QR, top-left corner, user asked 2026-11-28 08:12 "T cần
+  cái qr bé hơn nữa và để góc trên bên trái màn hình chứ k phải bên dưới"):
+  both QRs (in-activity card and floating overlay) are now 96dp (was the
+  Gathin 132dp) and anchored TOP-LEFT with 16dp left/top margins (was
+  bottom-left). This also settles the long-open corner question: the Gathin
+  original was bottom-left, but the user explicitly wants top-left. Home-
+  screen 3x rule unchanged — the multiplier still applies, so on the home
+  screen the card is now 288dp (was 396dp). Padding 4dp/3dp, radius 12dp,
+  label 16sp 0xFF14213A, Pinggy-only "/panel" QR content, hide-while-
+  reconnecting, drag, tap-to-toggle, long-press hide all unchanged.
 - v1.0.19 (panel self-heals through Pinggy's "Caution" screen, 2026-11-28
   07:48): Pinggy free serves a "Caution — you are about to visit a website
   that is served for free through pinggy.io" interstitial to browser UAs on

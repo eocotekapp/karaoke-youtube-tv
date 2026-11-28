@@ -345,6 +345,8 @@ public class KaraokeActivity extends Activity {
      * QrOverlayService's floating card, but this one lives in the Activity
      * itself so it needs no overlay permission — it is the QR the user scans
      * to open the phone panel. Hidden until a Pinggy URL exists.
+     * v1.0.20 (user, 2026-11-28): QR is now 96dp and the card sits at the
+     * TOP-LEFT corner (16dp margins) — smaller, out of the way of the video.
      */
     private LinearLayout buildQrCard() {
         LinearLayout card = new LinearLayout(this);
@@ -355,11 +357,11 @@ public class KaraokeActivity extends Activity {
         bg.setCornerRadius(dp(12));
         card.setBackground(bg);
         // v1.0.17: tight card — padding 4dp sides/top, 3dp bottom (was 9/6);
-        // the white background was too wide. QR stays 132dp.
+        // the white background was too wide. QR is 96dp (v1.0.20, was 132dp).
         card.setPadding(dp(4), dp(4), dp(4), dp(3));
         qrImage = new ImageView(this);
         qrImage.setScaleType(ImageView.ScaleType.FIT_XY);
-        qrImage.setLayoutParams(new LinearLayout.LayoutParams(dp(132), dp(132)));
+        qrImage.setLayoutParams(new LinearLayout.LayoutParams(dp(96), dp(96)));
         card.addView(qrImage);
         TextView label = new TextView(this);
         label.setText("Karaoke");
@@ -374,9 +376,9 @@ public class KaraokeActivity extends Activity {
         card.setVisibility(View.GONE);
         FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.gravity = Gravity.START | Gravity.BOTTOM; // bottom-left, Gathin
+        lp.gravity = Gravity.START | Gravity.TOP; // top-left (v1.0.20)
         lp.leftMargin = dp(16);
-        lp.bottomMargin = dp(16);
+        lp.topMargin = dp(16);
         card.setLayoutParams(lp);
         return card;
     }

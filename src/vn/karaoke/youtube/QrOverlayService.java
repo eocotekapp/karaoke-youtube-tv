@@ -50,11 +50,14 @@ import java.util.Set;
  *   - bitmap: MesuUi.qrBitmap(url, px) — quiet zone 2 modules each side
  * (The other Gathin QR, in the MesuSettings activity, is 190dp centred in a
  * settings screen — that is NOT the floating one, so it is not used here.)
- * This overlay reproduces that card exactly as its base size.
+ * This overlay reproduces that card's styling as its base size.
+ * v1.0.20 (user, 2026-11-28): base size is now 96dp (not the Gathin 132dp)
+ * and the anchor is TOP-LEFT (not bottom-left) — the user wants the QR
+ * smaller and at the top-left corner of the screen.
  *
- * HOME-SCREEN 3x RULE (user, 2026-11-27): the card is 3x the Gathin base size
- * (QR 396dp) ONLY while the foreground app is the launcher/home screen; in
- * any other app it returns to the Gathin base size (QR 132dp). Foreground
+ * HOME-SCREEN 3x RULE (user, 2026-11-27): the card is 3x the base size
+ * (QR 288dp) ONLY while the foreground app is the launcher/home screen; in
+ * any other app it returns to the base size (QR 96dp). Foreground
  * detection: UsageStatsManager first (needs usage-access grant, asked for on
  * the first-run screen), ActivityManager.getRunningAppProcesses as fallback.
  *
@@ -73,14 +76,15 @@ public class QrOverlayService extends Service {
     public static final String PREFS = "karaoke_overlay";
 
     // --- Gathin original, MesuHome.build() (see class doc) ---
-    private static final int GATHIN_QR_DP = 132;
+    // v1.0.20: base QR is 96dp (was the Gathin 132dp), top-left anchor.
+    private static final int GATHIN_QR_DP = 96;
     private static final int CARD_PAD_SIDE_DP = 4; // v1.0.17: was 9 — white bg too wide
     private static final int CARD_PAD_BOTTOM_DP = 3; // v1.0.17: was 6
     private static final int CARD_RADIUS_DP = 12;
     private static final int MARGIN_DP = 16;
     private static final int LABEL_SP = 16;
     private static final int LABEL_COLOR = 0xFF14213A;
-    private static final int HOME_SCALE = 3; // 132dp -> 396dp on the home screen
+    private static final int HOME_SCALE = 3; // 96dp -> 288dp on the home screen
 
     private static final long POLL_MS = 1500; // home detection + URL refresh
 
@@ -93,7 +97,7 @@ public class QrOverlayService extends Service {
     private String currentUrl = "";
     private boolean userHidden = false;
     private boolean added = false;
-    private boolean anchored = true; // bottom-left (Gathin) until the user drags
+    private boolean anchored = true; // top-left until the user drags
     private Boolean manualLarge = null; // null = auto (home detection drives size)
     private String lastForegroundPkg = null;
     private int currentScale = 1;
@@ -193,7 +197,7 @@ public class QrOverlayService extends Service {
                 PixelFormat.TRANSLUCENT);
         params.gravity = Gravity.TOP | Gravity.START;
         params.x = dp(MARGIN_DP);
-        params.y = screenH - params.height - dp(MARGIN_DP); // bottom-left, Gathin
+        params.y = dp(MARGIN_DP); // top-left, 16dp margins (v1.0.20)
         card.setOnTouchListener(new View.OnTouchListener() {
             private float downRawX, downRawY;
             private int downX, downY;
@@ -351,9 +355,9 @@ public class QrOverlayService extends Service {
                 View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED));
         int h = Math.max(card.getMeasuredHeight(), dp(qr));
         params.height = h;
-        if (anchored) { // Gathin position: bottom-left, 16dp margins
+        if (anchored) { // top-left anchor, 16dp margins (v1.0.20)
             params.x = dp(MARGIN_DP);
-            params.y = screenH - h - dp(MARGIN_DP);
+            params.y = dp(MARGIN_DP);
         } else {
             clampPosition();
         }
