@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.24-pinggy (versionCode 25) · **APK:** `KaraokeYouTube.apk` — **2,769,371 bytes**
+**Version:** 1.0.25-pinggy (versionCode 26) · **APK:** `KaraokeYouTube.apk` — **2,769,370 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -201,6 +201,36 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   usage-access prompt added (`maybePromptUsageAccess()`, modelled on the
   overlay prompt; flag `usage_prompt_asked`). Sizes unchanged
   (96/64/288dp).
+- v1.0.25 (Back dismisses the overlay video + PLAY-BG upload on overlay
+  show + usage-prompt once-ever check, 2026-11-28): (1) BACK-TO-DISMISS.
+  User report 2026-11-28 09:47 ("tao bam Khong thoat duoc"): the v1.0.24
+  overlay window was `FLAG_NOT_FOCUSABLE`, so no remote key ever reached
+  it and there was no dismiss path at all — Home switches the foreground
+  app but the overlay stays on top while the video plays. The window is
+  focusable now (`FLAG_NOT_FOCUSABLE` removed, `FLAG_NOT_TOUCH_MODAL`
+  kept) and the overlay `SurfaceView` takes focus (also re-asserted in
+  `surfaceCreated`) with an `OnKeyListener`: Back hides the overlay AND
+  pauses the player (user correction 2026-11-28 09:49 — "Thoat thi khong
+  can tieng nua"), using the exact same `MesuPlayer.pause()` the phone
+  panel's pause button uses, so the player state stays consistent. A
+  sticky flag (`videoOverlayDismissedByUser`) suppresses `endCheck` /
+  `onPause` re-show until the next `playNow()` (new track), panel resume
+  (`/api/control` toggle-to-play / resume / play clears it), or app-open
+  (`onResume` clears it); pressing play again from the panel resumes and
+  the overlay shows again within ~3 s (endCheck poll). Other remote keys
+  are dropped (the video is display-only; the panel controls playback).
+  Everything try/catch — audio never breaks on a Back press. (2) PLAY-BG
+  upload on overlay show: `showVideoOverlay()` now schedules the delayed
+  PLAY-BG upload itself on a real show transition — the GTA session proved
+  the onPause / endCheck path had none (track started in-foreground, the
+  overlay only appeared later via `onPause`, no upload ever fired). Same
+  reusable Runnable as `playNow` (re-posting replaces the pending one, so
+  at most one upload); suppressed shows (dismissed flag / activity
+  foreground) upload nothing. (3) USAGE PROMPT CHECK: `maybePromptUsageAccess()`
+  was already once-ever — `usage_prompt_asked` is set BEFORE `show()`, so
+  declining ("Để sau"), Back, or tap-outside all set the flag; no change
+  was needed. The v1.0.23 full-screen intent and the `startActivity`
+  attempt stay as secondary paths.
 - v1.0.22 (QR smaller while a video is playing, user asked 2026-11-28
   08:33 "Tôi cần QR bé hơn khi đang trong trình phát video"): while a video
   is playing (player state st==1 in "st,pos,dur,w,h,f") both QRs shrink to

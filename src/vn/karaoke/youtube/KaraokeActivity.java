@@ -535,6 +535,9 @@ public class KaraokeActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         isForeground = true; // v1.0.21
+        // v1.0.25: app-open clears a previous Back-dismiss — the activity
+        // surface owns the video again from here.
+        try { PlayerService s0 = PlayerService.getInstance(); if (s0 != null) s0.clearVideoOverlayDismissed(); } catch (Throwable ignored) { }
         attachSurface();
         // v1.0.21: if the stage never loaded (e.g. the server was down at
         // launch, or an earlier load errored out), a bring-to-front from

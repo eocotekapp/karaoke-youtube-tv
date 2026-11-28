@@ -13,8 +13,10 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.view.KeyEvent;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.widget.Toast;
@@ -207,6 +209,19 @@ public class PlayerService extends Service {
     private boolean videoOverlayAdded = false;
     private boolean videoOverlaySurfaceLive = false;
 
+    // v1.0.25: Back-dismissed by the user (see the key handler in
+    // showVideoOverlay()). While set, endCheck / onPause must NOT re-show
+    // the overlay — Back really exits the video view. Cleared on the next
+    // playNow() (new track), on panel resume (RemoteServer control), and
+    // when the activity comes to the foreground (KaraokeActivity.onResume).
+    // Volatile: set on the main thread (key handler), read on the main
+    // thread (show) and on pool threads (playNow).
+    private volatile boolean videoOverlayDismissedByUser = false;
+
+    /** v1.0.25: clear the Back-dismissed flag (new track / panel resume /
+     * app-open). Idempotent. */
+    public void clearVideoOverlayDismissed() { videoOverlayDismissedByUser = false; }
+
     // v1.0.24: PLAY-BG upload — delayed 2 s so the "Video overlay:" and
     // "Mo app:" lines land in the ring buffer before it is sent. One
     // Runnable; re-posting replaces the pending one (a second background
@@ -252,6 +267,13 @@ public class PlayerService extends Service {
                     // The activity may have come forward between the post
                     // and this run — then its surface owns the video.
                     if (KaraokeActivity.isForeground) return;
+                    // v1.0.25: the user dismissed the overlay with Back —
+                    // do NOT re-show until the next track / panel resume /
+                    // app-open clears the flag. Silent return: endCheck
+                    // calls this every 3 s, so logging here would flood
+                    // the ring buffer; the dismiss itself is logged once
+                    // in the Back handler ("Video overlay: bi tat...").
+                    if (videoOverlayDismissedByUser) return;
                     if (videoOverlayWm == null) {
                         videoOverlayWm = (WindowManager) getSystemService(WINDOW_SERVICE);
                     }
@@ -259,6 +281,43 @@ public class PlayerService extends Service {
                     videoOverlayView.setLayoutParams(new ViewGroup.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT));
+                    // v1.0.25: Back-to-dismiss (user report 2026-11-28
+                    // 09:47 — "tao bam Khong thoat duoc": the v1.0.24
+                    // window was FLAG_NOT_FOCUSABLE, so no remote key
+                    // ever reached it and there was no dismiss path at
+                    // all; Home switches the foreground app but the
+                    // overlay stays on top while the video plays). The
+                    // SurfaceView is made focusable and takes the Back
+                    // key: hide the overlay AND pause the player (user
+                    // correction 2026-11-28 09:49 — "Thoat thi khong can
+                    // tieng nua"). Pause uses the exact same path as the
+                    // phone panel's pause button (MesuPlayer.pause()),
+                    // so the player state stays consistent; no new stop
+                    // mechanism is invented. Other keys return false
+                    // (dropped — the video is display-only; the panel
+                    // controls playback). Pressing play again from the
+                    // panel resumes and the overlay shows again (the
+                    // flag is cleared on panel resume).
+                    videoOverlayView.setFocusable(true);
+                    videoOverlayView.setFocusableInTouchMode(true);
+                    videoOverlayView.setOnKeyListener(new View.OnKeyListener() {
+                        @Override public boolean onKey(View v, int keyCode, KeyEvent event) {
+                            if (keyCode == KeyEvent.KEYCODE_BACK
+                                    && event.getAction() == KeyEvent.ACTION_DOWN) {
+                                try {
+                                    videoOverlayDismissedByUser = true;
+                                    StartupLog.log("Video overlay: an do Back");
+                                    StartupLog.log("Video overlay: bi tat, khong hien lai");
+                                    hideVideoOverlay();
+                                    if (player != null) player.pause();
+                                } catch (Throwable t) {
+                                    StartupLog.log("Video overlay: Back LOI: " + t);
+                                }
+                                return true;
+                            }
+                            return false;
+                        }
+                    });
                     videoOverlayView.getHolder().addCallback(new SurfaceHolder.Callback() {
                         @Override public void surfaceCreated(SurfaceHolder h) {
                             try {
@@ -273,6 +332,10 @@ public class PlayerService extends Service {
                                     player.ensureSurface(h.getSurface());
                                     videoOverlaySurfaceLive = true;
                                     StartupLog.log("Video overlay: hien");
+                                    // v1.0.25: window focus can land after
+                                    // addView — re-assert it here so Back
+                                    // reaches the key handler.
+                                    try { videoOverlayView.requestFocus(); } catch (Throwable ignored) { }
                                 }
                             } catch (Throwable t) {
                                 StartupLog.log("Video overlay: gan surface LOI: " + t);
@@ -310,12 +373,16 @@ public class PlayerService extends Service {
                     int type = Build.VERSION.SDK_INT >= 26
                             ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                             : WindowManager.LayoutParams.TYPE_PHONE;
+                    // v1.0.25: FLAG_NOT_FOCUSABLE REMOVED — the v1.0.24
+                    // window could never receive the remote Back key.
+                    // The window is focusable now so Back reaches the
+                    // SurfaceView key handler; FLAG_NOT_TOUCH_MODAL stays
+                    // (touches outside still go to the window below).
                     WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             type,
-                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
-                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                             PixelFormat.TRANSLUCENT);
                     lp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
                     lp.x = 0;
@@ -323,6 +390,21 @@ public class PlayerService extends Service {
                     videoOverlayWm.addView(videoOverlayView, lp);
                     videoOverlayAdded = true;
                     StartupLog.log("Video overlay: tao");
+                    // v1.0.25: give the SurfaceView focus so Back reaches
+                    // its key handler (the window is focusable now).
+                    try { videoOverlayView.requestFocus(); } catch (Throwable ignored) { }
+                    // v1.0.25: PLAY-BG upload on a REAL show transition
+                    // (onPause / endCheck path had none — the GTA session
+                    // 2026-11-28 proved the evidence stayed in the ring
+                    // buffer because the track started in-foreground and
+                    // the overlay only appeared later via onPause).
+                    // Same reusable Runnable as playNow: re-posting
+                    // replaces the pending one, so at most one upload.
+                    // Only here (after the add) so a suppressed show
+                    // (dismissed flag / activity foreground) uploads
+                    // nothing and the token budget is not burned.
+                    handler.removeCallbacks(playBgUpload);
+                    handler.postDelayed(playBgUpload, 2000);
                     // The QR must stay ABOVE the video (it is how the user
                     // opens the panel): same-type windows stack by add
                     // order, so re-add the QR card on top of the video.
@@ -441,6 +523,9 @@ public class PlayerService extends Service {
         // stands as a secondary cause — which is why the overlay video
         // below is the primary mechanism now, not startActivity.
         if (!KaraokeActivity.isForeground) {
+            // v1.0.25: a new track clears a previous Back-dismiss so the
+            // overlay shows again for this track.
+            videoOverlayDismissedByUser = false;
             // v1.0.24 PRIMARY: service-owned overlay video surface — the
             // video renders on a fullscreen WindowManager overlay over
             // the home screen / other apps. Not blocked by

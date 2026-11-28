@@ -281,9 +281,13 @@ public class RemoteServer {
                 if (action == null) action = q.get("a");
                 if ("toggle".equals(action)) {
                     String st = player.getState();
-                    if (st.startsWith("1,")) player.pause(); else player.resume();
+                    if (st.startsWith("1,")) player.pause();
+                    // v1.0.25: resuming from the panel clears a previous
+                    // Back-dismiss so the overlay video shows again (the
+                    // endCheck poll re-shows it within ~3 s).
+                    else { player.resume(); if (service != null) service.clearVideoOverlayDismissed(); }
                 } else if ("pause".equals(action)) player.pause();
-                else if ("resume".equals(action) || "play".equals(action)) player.resume();
+                else if ("resume".equals(action) || "play".equals(action)) { player.resume(); if (service != null) service.clearVideoOverlayDismissed(); }
                 else if ("next".equals(action)) { LibraryState.Item n = library.next(); playItem(n); }
                 else if ("prev".equals(action)) { LibraryState.Item p = library.prev(); playItem(p); }
                 else if ("stop".equals(action)) player.stop();
