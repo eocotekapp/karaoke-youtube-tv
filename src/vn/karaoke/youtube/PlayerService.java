@@ -176,6 +176,33 @@ public class PlayerService extends Service {
 
     public void playNow(LibraryState.Item it) {
         if (it == null) return;
+        // v1.0.21: the video renders to the SurfaceView inside KaraokeActivity.
+        // If the user is on the home screen / another app, the activity is
+        // not in the foreground, so there is NO surface at all — the track
+        // plays audio-only (user report 2026-11-28 08:19: QR outside, on home
+        // or any other app, play a video -> no video, audio only). Bring the
+        // activity to the front before starting playback so its SurfaceView
+        // exists and the video shows. The activity is singleTask, so this
+        // reuses the existing instance (onNewIntent/onResume re-attaches the
+        // surface); if it was finished, a fresh instance is created and its
+        // onCreate loads the stage as usual.
+        // Background activity start is allowed here because the app holds
+        // SYSTEM_ALERT_WINDOW (overlay permission, already granted — the
+        // floating QR proves it), which exempts it from the Android 10+
+        // background-activity-start restriction. This must NEVER break
+        // playback: any failure is logged and the audio keeps playing.
+        if (!KaraokeActivity.isForeground) {
+            try {
+                Intent ai = new Intent(this, KaraokeActivity.class);
+                ai.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                        | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                        | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+                startActivity(ai);
+                StartupLog.log("Dua Karaoke len truoc khi phat");
+            } catch (Throwable t) {
+                StartupLog.log("Dua Karaoke len truoc LOI (am thanh van phat): " + t);
+            }
+        }
         player.play(it.id, it.title == null ? "" : it.title);
         onStartedPlaying();
     }

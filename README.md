@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.20-pinggy (versionCode 21) · **APK:** `KaraokeYouTube.apk` — **2,769,373 bytes**
+**Version:** 1.0.21-pinggy (versionCode 22) · **APK:** `KaraokeYouTube.apk` — **2,769,373 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -136,6 +136,27 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.21 (video now brings the app to the front, user report 2026-11-28
+  08:19 "qr ở ngoài màn hình chính hoặc trên bất kì app khác khi chọn phát
+  video thì nó không mở. Mặc dù vẫn có tiếng"): the player lives in the
+  foreground service, but its video goes to the SurfaceView that only exists
+  inside KaraokeActivity — so playing from the phone panel while the user was
+  on the home screen / another app played audio-only, with no surface at all.
+  `playNow()` (the single choke point: /playnow, queue advance, stall
+  watchdog, D-pad next/prev) now starts KaraokeActivity with
+  FLAG_ACTIVITY_NEW_TASK | SINGLE_TOP | REORDER_TO_FRONT whenever
+  `KaraokeActivity.isForeground` (new public static volatile flag, true in
+  onResume, false in onPause/onDestroy) is false, BEFORE starting playback.
+  The activity is singleTask, so the existing instance is reused and
+  onResume re-attaches the surface; if it was finished, a fresh instance is
+  created and loads the stage as usual. onResume also reloads the stage via
+  the existing wait-for-server-then-loadUrl path if it never loaded or an
+  earlier load errored (otherwise the dead status overlay would cover the
+  video). Background activity start is allowed because the app holds
+  SYSTEM_ALERT_WINDOW (overlay permission, already granted — the floating QR
+  proves it), which exempts it from the Android 10+ background-activity-start
+  restriction; the bring-to-front is wrapped in try/catch and can never break
+  playback — audio keeps playing even if the start fails.
 - v1.0.20 (smaller QR, top-left corner, user asked 2026-11-28 08:12 "T cần
   cái qr bé hơn nữa và để góc trên bên trái màn hình chứ k phải bên dưới"):
   both QRs (in-activity card and floating overlay) are now 96dp (was the

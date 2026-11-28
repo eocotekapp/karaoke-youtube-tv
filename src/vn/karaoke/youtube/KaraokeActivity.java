@@ -36,6 +36,12 @@ import android.widget.TextView;
  * D-pad first, Leanback, large text. Clean rewrite.
  */
 public class KaraokeActivity extends Activity {
+    // v1.0.21: is the activity in the foreground (resumed)? PlayerService
+    // checks this in playNow(): if the user is on the home screen or
+    // another app, there is no SurfaceView, so the track plays audio-only
+    // — the service must bring the activity to the front first.
+    public static volatile boolean isForeground = false;
+
     private WebView webView;
     private SurfaceView surfaceView;
 
@@ -439,14 +445,26 @@ public class KaraokeActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
+        isForeground = true; // v1.0.21
         attachSurface();
+        // v1.0.21: if the stage never loaded (e.g. the server was down at
+        // launch, or an earlier load errored out), a bring-to-front from
+        // playNow() would show the dead status overlay on top of the video
+        // — retry the normal wait-for-server-then-loadUrl path.
+        if (webView != null && (webView.getUrl() == null || stageErrorShown)) loadStageWhenReady();
         // v1.0.14: start the floating QR right after the user returns from
         // granting the overlay permission (prompt in onCreate / panel button).
         startQrOverlay();
         if (webView != null) webView.loadUrl("javascript:if(window.refresh)refresh()");
     }
 
+    @Override protected void onPause() {
+        isForeground = false; // v1.0.21
+        super.onPause();
+    }
+
     @Override protected void onDestroy() {
+        isForeground = false; // v1.0.21
         stageHandler.removeCallbacksAndMessages(null);
         if (webView != null) { webView.destroy(); webView = null; }
         super.onDestroy();
