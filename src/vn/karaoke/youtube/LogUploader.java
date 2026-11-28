@@ -12,15 +12,20 @@ import java.util.Date;
  * Sends the startup log to Mesu automatically (webhook.site) so the user
  * never has to photograph the screen: open the app, the log arrives.
  * Best-effort, never blocks startup; the crash path waits at most ~4 s.
- * Endpoint is a webhook.site token created 2026-11-27, expires ~7 days
+ * Endpoint is a webhook.site token created 2026-11-28, expires ~7 days
  * after creation — if it stops receiving, mint a fresh token and rebuild.
+ * TOKEN HISTORY: the 2026-11-27 token died 2026-11-28 — webhook.site free
+ * tokens cap at 50 stored requests, then answer HTTP 429 "Request limit
+ * exceeded" and DROP every upload, so the app looked like it had stopped
+ * logging while it was still uploading (last upload seen 08:32:51).
+ * This token (2026-11-28) is the replacement; same 50-request cap applies.
  */
 public class LogUploader {
     public static final String ENDPOINT =
-            "https://webhook.site/0f050b91-2325-4fa8-8fa6-4e6be74c9286";
+            "https://webhook.site/136db121-40cd-4cd6-b6fe-5c0818bce1fa";
     /** Read the logs in a browser (same token): */
     public static final String VIEW_URL =
-            "https://webhook.site/#!/view/0f050b91-2325-4fa8-8fa6-4e6be74c9286";
+            "https://webhook.site/#!/view/136db121-40cd-4cd6-b6fe-5c0818bce1fa";
 
     private static String buildBody(Context ctx, String tag) {
         return buildBody(ctx, tag, null, null);

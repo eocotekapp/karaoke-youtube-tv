@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.22-pinggy (versionCode 23) · **APK:** `KaraokeYouTube.apk` — **2,769,373 bytes**
+**Version:** 1.0.23-pinggy (versionCode 24) · **APK:** `KaraokeYouTube.apk` — **2,769,370 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -136,6 +136,31 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.23 (fresh log token + full-screen-intent fallback for exit-play
+  video, 2026-11-28 09:01): TWO fixes. (1) LOG CHANNEL: the webhook.site
+  token from 2026-11-27 died — free tokens cap at 50 stored requests, then
+  answer HTTP 429 "Request limit exceeded" and DROP every upload, so the app
+  looked like it had stopped logging while it was still uploading (last
+  upload seen 08:32:51; a test POST proved the 429). Token replaced with a
+  fresh one minted 2026-11-28 (expires ~2026-12-05); same 50-request cap
+  applies, so expect another swap around then. (2) EXIT-PLAY VIDEO: the
+  v1.0.21 startActivity bring-to-front did NOT work on the FPT Play 650 —
+  user installed v1.0.22 and still got audio-only when playing from the
+  panel while exited. Audit (in `PlayerService.playNow()` comments): on API
+  30 a blocked background activity start fails SILENTLY — startActivity()
+  does not throw, so the try/catch could not see it; the
+  SYSTEM_ALERT_WINDOW exemption evidently does not take effect on this
+  operator box. The surface re-attach path was verified sound (no gap).
+  Fix: keep the startActivity attempt as the FIRST try; ~1 s later, if
+  `KaraokeActivity.isForeground` is still false, post a HIGH-PRIORITY
+  notification with a FULL-SCREEN INTENT to KaraokeActivity (new channel
+  `karaoke_fullscreen`, notification id 8793, `USE_FULL_SCREEN_INTENT`
+  declared in the manifest) — the mechanism Android provides for showing
+  UI from a background service, independent of the background-activity
+  exemption. On an unlocked TV box it normally surfaces as a heads-up the
+  user opens with one remote OK press (on many TV firmwares it opens
+  straight away). Every step is logged ("Mo app: ..." lines) and the
+  fallback can never break playback — audio keeps playing no matter what.
 - v1.0.22 (QR smaller while a video is playing, user asked 2026-11-28
   08:33 "Tôi cần QR bé hơn khi đang trong trình phát video"): while a video
   is playing (player state st==1 in "st,pos,dur,w,h,f") both QRs shrink to

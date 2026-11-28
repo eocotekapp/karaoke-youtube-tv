@@ -5,8 +5,8 @@
      NO Termux, NO com.gathin.* references. -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="vn.karaoke.youtube"
-    android:versionCode="23"
-    android:versionName="1.0.22-pinggy">
+    android:versionCode="24"
+    android:versionName="1.0.23-pinggy">
 
     <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="30" />
 
@@ -18,6 +18,11 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- Full-screen intent (v1.0.23 fallback): lets the service surface the
+         player activity from the background when the plain startActivity is
+         silently dropped (see PlayerService). On API 30 this is granted by
+         default; the declaration is for correctness. -->
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Usage access (granted in Settings, not at install): lets the floating QR
          know when the launcher/home screen is in the foreground so it can grow
          3x there. Without it the overlay falls back to the running-process list. -->

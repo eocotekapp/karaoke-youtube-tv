@@ -22,6 +22,10 @@ import android.widget.Toast;
 public class PlayerService extends Service {
     private static final int NOTIF_ID = 8792;
     private static final String CHANNEL = "karaoke_playback";
+    // v1.0.23: full-screen-intent fallback (see playNow()). A different
+    // notification id so it never clobbers the foreground-service one.
+    private static final int NOTIF_FS_ID = 8793;
+    private static final String CHANNEL_FS = "karaoke_fullscreen";
 
     private static PlayerService instance;
     public static PlayerService getInstance() { return instance; }
@@ -174,8 +178,27 @@ public class PlayerService extends Service {
         updateNotification();
     }
 
+    // v1.0.23: delayed bring-to-front check (see playNow()). One reusable
+    // Runnable; pendingFsTitle carries the track name for the notification.
+    private String pendingFsTitle = "";
+    private final Runnable bringToFrontCheck = new Runnable() {
+        @Override public void run() {
+            try {
+                if (KaraokeActivity.isForeground) {
+                    StartupLog.log("Mo app: da len, khong can full-screen intent");
+                    return;
+                }
+                StartupLog.log("Mo app: chua len, dung full-screen intent");
+                postFullScreenNotification(pendingFsTitle);
+            } catch (Throwable t) {
+                StartupLog.log("Mo app: that bai: " + t);
+            }
+        }
+    };
+
     public void playNow(LibraryState.Item it) {
         if (it == null) return;
+        String title = it.title == null ? "" : it.title;
         // v1.0.21: the video renders to the SurfaceView inside KaraokeActivity.
         // If the user is on the home screen / another app, the activity is
         // not in the foreground, so there is NO surface at all — the track
@@ -186,13 +209,44 @@ public class PlayerService extends Service {
         // reuses the existing instance (onNewIntent/onResume re-attaches the
         // surface); if it was finished, a fresh instance is created and its
         // onCreate loads the stage as usual.
-        // Background activity start is allowed here because the app holds
-        // SYSTEM_ALERT_WINDOW (overlay permission, already granted — the
-        // floating QR proves it), which exempts it from the Android 10+
-        // background-activity-start restriction. This must NEVER break
-        // playback: any failure is logged and the audio keeps playing.
+        //
+        // AUDIT 2026-11-28 (v1.0.23) — why v1.0.21 did NOT work on the FPT
+        // Play 650, read end to end (RemoteServer /api/playnow -> playItem
+        // -> playNow -> startActivity -> onResume/attachSurface -> player):
+        //  1. startActivity() from a background service can fail SILENTLY.
+        //     On API 30 the system drops a blocked background activity start
+        //     WITHOUT throwing (ActivityManager only logs it), so the v1.0.21
+        //     try/catch could not see it: the log said "Dua Karaoke len
+        //     truoc khi phat" and playback went on audio-only. The
+        //     SYSTEM_ALERT_WINDOW exemption is the theory, but on this
+        //     operator box it evidently does not take effect — and whether
+        //     the permission was actually granted at that moment cannot be
+        //     confirmed from the code (the overlay runs, but its grant state
+        //     is never logged). The log channel was dead at the same time
+        //     (webhook 429), so the "Dua Karaoke..." line was never seen.
+        //  2. Race (secondary, not the cause): playNow() calls player.play()
+        //     immediately after startActivity(); resolve takes seconds and
+        //     ExoPlayer starts decoding with surface=null (cleared in
+        //     surfaceDestroyed on exit). ensureSurface() re-attaches later
+        //     and ExoPlayer renders once a surface is set — so this alone
+        //     cannot explain permanent audio-only.
+        //  3. The surface path itself is SOUND (verified): surfaceDestroyed
+        //     -> ensureSurface(null); surfaceCreated / surfaceChanged /
+        //     onResume -> attachSurface() -> ensureSurface(surface), with a
+        //     500 ms x 20 retry when the service/surface is not ready yet;
+        //     video rendered fullscreen in v1.0.12 whenever the activity was
+        //     in front. No gap found — left untouched.
+        //  4. isForeground is correct (true in onResume, false in onPause /
+        //     onDestroy). The stage status overlay is a bare TextView (no
+        //     opaque background) and the video plays fine while the app is
+        //     open, so it is not covering the picture either.
+        // CONCLUSION: the single point of failure is step 1. The fix below
+        // keeps the startActivity attempt as the FIRST try and adds a
+        // second, independent mechanism — a full-screen intent — that does
+        // not depend on the background-activity-start exemption at all.
         if (!KaraokeActivity.isForeground) {
             try {
+                StartupLog.log("Mo app: startActivity dua Karaoke len truoc");
                 Intent ai = new Intent(this, KaraokeActivity.class);
                 ai.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
                         | Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -202,9 +256,59 @@ public class PlayerService extends Service {
             } catch (Throwable t) {
                 StartupLog.log("Dua Karaoke len truoc LOI (am thanh van phat): " + t);
             }
+            // v1.0.23 fallback: the start above can be dropped silently (see
+            // audit). ~1 s later, check whether the activity actually came
+            // to the front; if not, post a HIGH-PRIORITY notification with a
+            // FULL-SCREEN INTENT — the mechanism Android provides for showing
+            // UI from a background service (incoming calls). On an unlocked
+            // TV box this normally surfaces as a heads-up the user opens with
+            // one remote OK press, and on many TV firmwares it opens the
+            // activity straight away. Never breaks playback: everything is
+            // wrapped, audio keeps playing no matter what.
+            pendingFsTitle = title;
+            handler.removeCallbacks(bringToFrontCheck);
+            handler.postDelayed(bringToFrontCheck, 1000);
         }
-        player.play(it.id, it.title == null ? "" : it.title);
+        player.play(it.id, title);
         onStartedPlaying();
+    }
+
+    /** v1.0.23: high-priority notification carrying a full-screen intent to
+     * KaraokeActivity. Posted only when the activity is still not in the
+     * foreground ~1 s after the plain startActivity attempt. */
+    private void postFullScreenNotification(String title) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26) {
+                NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                NotificationChannel ch = new NotificationChannel(CHANNEL_FS, "Karaoke — mở video",
+                        NotificationManager.IMPORTANCE_HIGH);
+                nm.createNotificationChannel(ch);
+            }
+            Intent ai = new Intent(this, KaraokeActivity.class);
+            ai.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                    | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT);
+            PendingIntent pi = PendingIntent.getActivity(this, 1, ai,
+                    Build.VERSION.SDK_INT >= 23 ? PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE
+                            : PendingIntent.FLAG_UPDATE_CURRENT);
+            Notification.Builder b;
+            if (Build.VERSION.SDK_INT >= 26) b = new Notification.Builder(this, CHANNEL_FS);
+            else b = new Notification.Builder(this);
+            String text = "Đang phát" + (title == null || title.isEmpty() ? "" : ": " + title)
+                    + " — mở để xem video";
+            Notification n = b.setContentTitle("Karaoke YouTube")
+                    .setContentText(text)
+                    .setSmallIcon(R.drawable.ic_app)
+                    .setContentIntent(pi)
+                    .setFullScreenIntent(pi, true)
+                    .setAutoCancel(true)
+                    .build();
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            nm.notify(NOTIF_FS_ID, n);
+            StartupLog.log("Mo app: da gui full-screen intent");
+        } catch (Throwable t) {
+            StartupLog.log("Mo app: gui full-screen intent LOI: " + t);
+        }
     }
 
     public void setSleepMinutes(int minutes) {
