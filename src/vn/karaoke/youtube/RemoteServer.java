@@ -511,7 +511,20 @@ public class RemoteServer {
         "<div class='row'><span>Pinggy:</span><button onclick=\"pinggy('enable')\">Bật</button><button onclick=\"pinggy('disable')\">Tắt</button><button onclick=\"pinggy('restart')\">Đổi link</button><span class='muted' id='pg'></span></div>" +
         "<div class='row'><span>QR nổi:</span><button onclick=\"overlay('enable')\">Hiện</button><button onclick=\"overlay('disable')\">Ẩn</button><button onclick=\"overlay('grant')\">Cấp quyền</button><span class='muted'>QR chỉ hiện link Pinggy, tunnel chết thì tự ẩn</span></div>" +
         "<script>" +
-        "async function api(p){const r=await fetch(p);return r.json();}" +
+        // v1.0.19: Pinggy free serves a "Caution" interstitial to browser UAs on
+        // EVERY request (incl. /api/state) — fetch() gets HTML, r.json() throws and
+        // refresh() dies, leaving "Đang tải…" forever (seen 2026-11-28 in a real
+        // browser even after clicking "Enter site"). Pinggy's own bypass: an XHR
+        // GET to the page URL with header X-Pinggy-No-Screen-Cookie: true +
+        // withCredentials sets the bypass cookie/whitelist (response body is
+        // empty by design). The panel fires that handshake itself on load and
+        // apiSafe() re-fires it + retries once on any JSON-parse failure, so a
+        // button can never die silently on an interstitial response. A retry
+        // is safe: a parse failure means Pinggy intercepted the request, so
+        // it never reached our server (no double-execution of control actions).
+        "function pinggyHandshake(){try{var x=new XMLHttpRequest();x.open('GET',location.href,true);x.withCredentials=true;x.setRequestHeader('X-Pinggy-No-Screen-Cookie','true');x.send();}catch(e){}}" +
+        "async function apiSafe(p){try{const r=await fetch(p);const t=await r.text();return JSON.parse(t);}catch(e){pinggyHandshake();await new Promise(function(res){setTimeout(res,1500);});const r2=await fetch(p);return r2.json();}}" +
+        "async function api(p){return apiSafe(p);}" +
         "async function ctl(a){await api('/api/control?action='+a);refresh();}" +
         "async function pinggy(a){await api('/api/pinggy?action='+a);refresh();}" +
         "async function overlay(a){await api('/api/overlay?action='+a);refresh();}" +
@@ -522,18 +535,18 @@ public class RemoteServer {
         "async function playnow(id,t){await api('/api/playnow?id='+id+'&title='+encodeURIComponent(t));refresh();}" +
         "async function paste(){const u=document.getElementById('paste').value;await api('/api/paste?mode=playnow&url='+encodeURIComponent(u));refresh();}" +
         "async function pasteQ(){const u=document.getElementById('paste').value;await api('/api/paste?url='+encodeURIComponent(u));refresh();}" +
-        "async function refresh(){const s=await api('/api/state');" +
+        "async function refresh(){try{const s=await api('/api/state');" +
         "const cur=s.current&&s.current.id?('▶ '+s.current.title):'Chưa phát bài nào';" +
         "document.getElementById('now').textContent=cur+(s.sleepMinutesLeft?' • Tắt sau '+s.sleepMinutesLeft+'p':'');" +
         "document.getElementById('queue').innerHTML=(s.queue||[]).map((v,i)=>\"<div class='item'>\"+(i===s.currentIndex?'▶ ':'')+v.title+\" <button onclick=\\\"jump(\"+i+\")\\\">Phát</button> <button onclick=\\\"rm(\"+i+\")\\\">Xóa</button></div>\").join('')||'Hàng đợi trống';" +
         "document.getElementById('links').innerHTML='LAN: '+s.lanUrl+'/panel'+(s.pinggyUrl?'<br>Internet (Pinggy): '+s.pinggyUrl+'/panel ('+s.pinggyState+')':'<br>Internet (Pinggy): '+s.pinggyState);" +
         "document.getElementById('pg').textContent=s.pinggyState;" +
         "const pl=await api('/api/playlists');" +
-        "document.getElementById('playlists').innerHTML=(pl.playlists||[]).map(p=>\"<div class='item'>\"+p.name+\" (\"+p.items.length+\") <button onclick=\\\"plPlay('\"+p.name+\"')\\\">Phát</button></div>\").join('')||'Chưa có playlist';}" +
+        "document.getElementById('playlists').innerHTML=(pl.playlists||[]).map(p=>\"<div class='item'>\"+p.name+\" (\"+p.items.length+\") <button onclick=\\\"plPlay('\"+p.name+\"')\\\">Phát</button></div>\").join('')||'Chưa có playlist';}catch(e){document.getElementById('now').textContent='Đang kết nối lại…';}}" +
         "async function jump(i){await api('/api/control?action=jump&index='+i);refresh();}" +
         "async function rm(i){await api('/api/control?action=remove&index='+i);refresh();}" +
         "async function plPlay(n){await api('/api/playlist-play?name='+encodeURIComponent(n));refresh();}" +
-        "refresh();setInterval(refresh,5000);" +
+        "pinggyHandshake();setTimeout(function(){refresh();setInterval(refresh,5000);},800);" +
         "</script></body></html>";
 
     /** TV stage (served at /stage): bare transparent page, exactly like the

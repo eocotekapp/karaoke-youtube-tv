@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.18-pinggy (versionCode 19) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
+**Version:** 1.0.19-pinggy (versionCode 20) · **APK:** `KaraokeYouTube.apk` — **2,769,371 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -136,6 +136,25 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.19 (panel self-heals through Pinggy's "Caution" screen, 2026-11-28
+  07:48): Pinggy free serves a "Caution — you are about to visit a website
+  that is served for free through pinggy.io" interstitial to browser UAs on
+  EVERY request, incl. /api/state (verified live: curl default UA = real
+  content, iPhone Safari/Chrome UA = 15,492-byte Caution HTML). A real-browser
+  check of /panel showed the static UI rendering after "Enter site" but ALL
+  dynamic data stuck empty ("Đang tải…" forever) — fetch('/api/state') got
+  Caution HTML, r.json() threw, refresh() died. Bypass (from the Caution
+  page's own access() script): an XHR GET to the page URL with header
+  "X-Pinggy-No-Screen-Cookie: true" + withCredentials sets the bypass
+  (response body empty by design); browser-UA requests from the same client
+  after it return real JSON. Fix (panel JS only): the panel fires that
+  handshake itself on load (before the first refresh, ~800 ms), and all API
+  calls go through apiSafe() — fetch + JSON.parse, on failure re-fire the
+  handshake and retry once; refresh() is wrapped in try/catch and shows
+  "Đang kết nối lại…" instead of stuck "Đang tải…", with the 5 s interval
+  still retrying. Retry is safe: a parse failure means Pinggy intercepted
+  the request, so it never reached the server (no double-execution of
+  control actions). Panel JS syntax-checked with node --check.
 - v1.0.18 (white control-panel page, user scanned the QR a dozen times and
   his iPhone showed a pure white page, 2026-11-28 07:40): root cause — the QR
   encoded the bare Pinggy root URL, and "/" served the bare transparent TV
