@@ -13,6 +13,8 @@ import com.google.android.exoplayer2.source.ProgressiveMediaSource;
 import com.google.android.exoplayer2.source.dash.DashMediaSource;
 import com.google.android.exoplayer2.source.hls.HlsMediaSource;
 import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
+import com.google.android.exoplayer2.upstream.DataSource;
+import com.google.android.exoplayer2.upstream.DataSpec;
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.google.android.exoplayer2.upstream.HttpDataSource;
 import com.google.android.exoplayer2.video.VideoSize;
@@ -37,6 +39,51 @@ public class MesuPlayer {
      * setVolume() so /api/state can report volume 0-100 (the Gathin
      * panel's slider reads s.volume on every refresh). */
     private volatile float lastVolume = 1.0f;
+
+    /** v1.0.30: HLS loads — master manifest, variant playlists, segments
+     * — must ALL go through the local /stream proxy (the proven path:
+     * RemoteServer.proxyStream forwards Range and streams bytes).
+     * ExoPlayer's HlsMediaSource fetches every one of those through its
+     * DataSource.Factory, so this small DefaultHttpDataSource subclass
+     * rewrites ANY URI it is asked to open to the proxy URL. Manifest
+     * contents are NOT rewritten. getUri() still returns the ORIGINAL
+     * URI so ExoPlayer resolves relative URIs against the real playlist
+     * location (YouTube's variant playlists happen to use absolute
+     * segment URIs, but this keeps the player's view of the world
+     * identical to a direct load). URIs already pointing at the proxy
+     * pass through unchanged — no double proxying. Used by the HLS
+     * branch ONLY; progressive/DASH keep the plain factory, untouched.
+     * Verified live 2026-11-28: the Invidious master manifest for
+     * jkVlEvuGjg8 has one variant (1920x1080) with absolute
+     * youtube.com variant URIs, and its variant playlist lists 902
+     * absolute googlevideo segment URIs — all three load kinds hit
+     * this factory. */
+    private static final String PROXY_PREFIX = "http://127.0.0.1:8792/stream?u=";
+    private static class ProxyHttpDataSource extends DefaultHttpDataSource {
+        private Uri originalUri;
+        ProxyHttpDataSource() {
+            super(YoutubeApi.UA, 15000, 30000, true, new HttpDataSource.RequestProperties());
+        }
+        @Override
+        public long open(DataSpec dataSpec) throws HttpDataSource.HttpDataSourceException {
+            originalUri = dataSpec.uri;
+            String s = dataSpec.uri.toString();
+            if (!s.startsWith(PROXY_PREFIX)) {
+                try {
+                    dataSpec = dataSpec.withUri(Uri.parse(PROXY_PREFIX +
+                            java.net.URLEncoder.encode(s, "UTF-8")));
+                } catch (Exception ignored) { }
+            }
+            return super.open(dataSpec);
+        }
+        @Override
+        public Uri getUri() {
+            return originalUri != null ? originalUri : super.getUri();
+        }
+    }
+    private static final DataSource.Factory PROXY_HTTP_FACTORY = new DataSource.Factory() {
+        @Override public DataSource createDataSource() { return new ProxyHttpDataSource(); }
+    };
 
     public MesuPlayer(Context ctx) { this.ctx = ctx.getApplicationContext(); }
 
@@ -139,7 +186,11 @@ public class MesuPlayer {
                 Uri uri = Uri.parse(playUrl);
                 MediaItem item = MediaItem.fromUri(uri);
                 if ("hls".equals(kind) || url.contains(".m3u8")) {
-                    source = new HlsMediaSource.Factory(http).createMediaSource(item);
+                    // v1.0.30: HLS loads (manifest + variant playlists +
+                    // segments) all go through the /stream proxy via
+                    // PROXY_HTTP_FACTORY — the plain factory would fetch
+                    // variant playlists/segments direct from googlevideo.
+                    source = new HlsMediaSource.Factory(PROXY_HTTP_FACTORY).createMediaSource(item);
                 } else if (url.contains(".mpd")) {
                     source = new DashMediaSource.Factory(http).createMediaSource(item);
                 } else {

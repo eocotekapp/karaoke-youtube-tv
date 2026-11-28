@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.29-pinggy (versionCode 30) · **APK:** `KaraokeYouTube.apk` — **2,785,824 bytes**
+**Version:** 1.0.30-pinggy (versionCode 31) · **APK:** `KaraokeYouTube.apk` — **2,789,919 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -287,6 +287,47 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   unchanged. Rationale: 64dp = 128 physical px on this 320dpi box, ~2.8px
   per module for the v5 panel URL — still scannable from the couch, and
   half the Gathin original's 132dp.
+- v1.0.30 (1080p VIA INVIDIOUS HLS, 2026-11-28 — user: "Nó không hề phát
+  video ở 1080p"): ROOT CAUSE — InnerTube client ANDROID only ever returns
+  itag 18 (640x360) with a playable URL (verified live: `formats` = [18]
+  for jkVlEvuGjg8; itag 22 absent; all 25 adaptiveFormats — 137/299/136/
+  140... — carry NEITHER `url` NOR `signatureCipher`, because YouTube
+  withholds direct adaptive URLs without a poToken; `hlsManifestUrl` is
+  absent for ANDROID; WEB returns UNPLAYABLE, TVHTML5 LOGIN_REQUIRED, IOS
+  HTTP 400 from this VM — poToken generation deliberately NOT attempted).
+  The code's prefer list {22,18,...} therefore always landed on 18, and
+  `prepareFromCandidates` plays the first candidate — hence every "Video:"
+  log read 640x360. FIX: when the best progressive is itag 18 (or there
+  is none), `YoutubeApi.resolve()` also asks Invidious and puts its HLS
+  manifest candidate FIRST, progressive after it as fallback;
+  `hlsInvidious()` now prefers the `hlsUrl` master manifest over
+  `formatStreams` (formatStreams tops out at 720p and was EMPTY for the
+  user's videos). Verified live 2026-11-28: yt.chocolatemoo53.com
+  /api/v1/videos/jkVlEvuGjg8 returns hlsUrl whose master manifest has
+  RESOLUTION=1920x1080 (BANDWIDTH=4513312, VP9+AAC) with absolute
+  youtube.com variant URIs; its variant playlist lists 902 absolute
+  googlevideo segment URIs. The other two list hosts (ducks.party,
+  materialio.us) returned HTTP 500. HLS loads (master manifest, variant
+  playlists, segments) ALL go through the local /stream proxy via a small
+  `DefaultHttpDataSource` subclass (`ProxyHttpDataSource` in MesuPlayer)
+  that rewrites any URI it is asked to open to
+  `http://127.0.0.1:8792/stream?u=...` — manifest contents are NOT
+  rewritten, `getUri()` still returns the original URI, already-proxied
+  URIs pass through unchanged; progressive/DASH keep the plain factory.
+  The track-selector cap is UNTOUCHED (1920x1080, 12 Mbps, NO frame-rate
+  cap — user demands 60fps). HLS-manifest resolves are NOT cached (the
+  manifest URL carries an expire= timestamp); the resolve log now names
+  the chosen path, e.g. "hls (invidious)". HONEST LIMITS: when ALL
+  Invidious hosts are down the video falls back to 360p (same as today,
+  no regression). The Invidious master manifest carries a SINGLE variant
+  per video — for a 60fps source video that variant is the source's top
+  quality, NOT 1080p60: 4s7OVBc6HBo's manifest is 2560x1440 @ 60fps
+  (BANDWIDTH=14143231). ExoPlayer 2.19.1 defaults
+  `exceedVideoConstraintsIfNecessary=true`, so the cap does not block it
+  — it plays at 1440p60 if the decoder can, else the stall watchdog
+  advances. The box's decoder died once on 1080p60 (2026-11-28 07:04
+  MediaCodec error) — if it chokes again that is the decoder, not the
+  stream. Channel search still cut.
 - v1.0.29 (REAL GATHIN PANEL, 2026-11-28 — user: "Giao diện như vậy mày bảo
   giống gathintv mày có thật sự xem code code gathintv không thế"): the phone
   panel is now the REAL Gathin TV panel, ported verbatim from the original

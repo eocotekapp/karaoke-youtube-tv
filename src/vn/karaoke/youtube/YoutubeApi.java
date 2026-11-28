@@ -286,12 +286,38 @@ public class YoutubeApi {
                 }
             }
             result.put("candidates", cands);
-            if (cands.length() == 0) {
-                // Invidious fallback
+            // v1.0.30: InnerTube ANDROID only ever returns itag 18
+            // (640x360) with a playable URL — itag 22 is absent and every
+            // adaptiveFormat (137/299/136/140...) carries NEITHER url NOR
+            // signatureCipher (no poToken). So when the best progressive
+            // is itag 18 (or there is none), also ask Invidious and put
+            // its HLS manifest candidate FIRST — the manifest carries
+            // every quality incl. 1080p. Progressive stays after it as
+            // fallback, so a dead Invidious is no regression (360p as
+            // today). Verified live 2026-11-28: yt.chocolatemoo53.com
+            // /api/v1/videos/<id> returns hlsUrl whose master manifest
+            // has RESOLUTION=1920x1080 (jkVlEvuGjg8); the other two list
+            // hosts (ducks.party, materialio.us) returned HTTP 500.
+            if (cands.length() == 0 || bestIsItag18(cands)) {
                 JSONObject inv = hlsInvidious(videoId);
                 if (inv != null) {
-                    result.put("title", inv.optString("title", result.optString("title")));
-                    result.put("candidates", inv.optJSONArray("candidates"));
+                    JSONArray invCands = inv.optJSONArray("candidates");
+                    if (invCands != null && invCands.length() > 0) {
+                        JSONObject first = invCands.optJSONObject(0);
+                        if (first != null && "hls".equals(first.optString("kind"))) {
+                            JSONArray merged = new JSONArray();
+                            merged.put(first);
+                            for (int i = 0; i < cands.length(); i++) merged.put(cands.optJSONObject(i));
+                            cands = merged;
+                            result.put("candidates", cands);
+                        } else if (cands.length() == 0) {
+                            result.put("candidates", invCands);
+                            cands = invCands;
+                        }
+                    }
+                    if (result.optString("title", "").isEmpty()) {
+                        result.put("title", inv.optString("title", ""));
+                    }
                 }
             }
         } catch (Exception e) {
@@ -311,10 +337,40 @@ public class YoutubeApi {
             LogUploader.send("RESOLVE-ERR");
             throw new Exception("no playable stream for " + videoId);
         }
-        putCached(directCache, videoId, result.toString(), DIRECT_TTL_MS);
-        StartupLog.log("Resolve " + videoId + " OK: " + result.optJSONArray("candidates").length()
-                + " ung vien, '" + result.optString("title") + "'");
+        // v1.0.30: NEVER cache a resolve whose chosen (first) candidate
+        // is an HLS manifest. The manifest URL carries an expire=
+        // timestamp and is minted per request/IP — a cached copy can go
+        // stale (and ExoPlayer re-fetches the manifest on every play
+        // anyway, so caching buys nothing here). Progressive-only
+        // results keep the 10-min direct cache as before.
+        JSONArray finalCands = result.optJSONArray("candidates");
+        boolean firstIsHls = finalCands != null && finalCands.length() > 0
+                && "hls".equals(finalCands.optJSONObject(0).optString("kind"));
+        if (!firstIsHls) putCached(directCache, videoId, result.toString(), DIRECT_TTL_MS);
+        // Name the chosen path in the log (first candidate is the one
+        // MesuPlayer plays): e.g. "hls itag (invidious)" when the
+        // Invidious manifest wins, "progressive itag18" otherwise.
+        StringBuilder desc = new StringBuilder();
+        if (finalCands != null) for (int i = 0; i < finalCands.length(); i++) {
+            JSONObject c = finalCands.optJSONObject(i);
+            if (c == null) continue;
+            if (desc.length() > 0) desc.append(", ");
+            desc.append(c.optString("kind"));
+            if (c.has("itag")) desc.append(" itag").append(c.optString("itag"));
+            if ("invidious".equals(c.optString("source"))) desc.append(" (invidious)");
+        }
+        StartupLog.log("Resolve " + videoId + " OK: " + finalCands.length()
+                + " ung vien [" + desc + "], '" + result.optString("title") + "'");
         return result;
+    }
+
+    /** Best InnerTube progressive is itag 18 (640x360)? The prefer loop
+     * breaks after the first itag with candidates, so every candidate
+     * carries the same itag — checking the first is enough. */
+    private static boolean bestIsItag18(JSONArray cands) {
+        if (cands == null || cands.length() == 0) return false;
+        JSONObject first = cands.optJSONObject(0);
+        return first != null && first.optInt("itag", -1) == 18;
     }
 
     private JSONObject hlsInvidious(String videoId) {
@@ -323,26 +379,34 @@ public class YoutubeApi {
                 String s = fetchText(host + "/api/v1/videos/" + videoId, null);
                 JSONObject o = new JSONObject(s);
                 JSONArray cands = new JSONArray();
-                JSONArray fs = o.optJSONArray("formatStreams");
-                if (fs != null) {
-                    for (int i = 0; i < fs.length(); i++) {
-                        JSONObject f = fs.optJSONObject(i);
-                        if (f.has("url")) {
-                            JSONObject c = new JSONObject();
-                            c.put("url", f.optString("url"));
-                            c.put("kind", "progressive");
-                            c.put("itag", f.optString("itag"));
-                            cands.put(c);
+                // v1.0.30: prefer the hlsUrl master manifest FIRST — it
+                // carries every quality incl. 1080p (verified live: the
+                // jkVlEvuGjg8 manifest has RESOLUTION=1920x1080 with
+                // absolute youtube.com variant URIs). formatStreams tops
+                // out at 720p and was EMPTY for the videos the user plays,
+                // so it is only a fallback when the instance returns no
+                // hlsUrl. "source" tags the candidate for the resolve log.
+                String hls = o.optString("hlsUrl", null);
+                if (hls != null && !hls.isEmpty()) {
+                    JSONObject c = new JSONObject();
+                    c.put("url", hls.startsWith("http") ? hls : host + hls);
+                    c.put("kind", "hls");
+                    c.put("source", "invidious");
+                    cands.put(c);
+                } else {
+                    JSONArray fs = o.optJSONArray("formatStreams");
+                    if (fs != null) {
+                        for (int i = 0; i < fs.length(); i++) {
+                            JSONObject f = fs.optJSONObject(i);
+                            if (f.has("url")) {
+                                JSONObject c = new JSONObject();
+                                c.put("url", f.optString("url"));
+                                c.put("kind", "progressive");
+                                c.put("itag", f.optString("itag"));
+                                c.put("source", "invidious");
+                                cands.put(c);
+                            }
                         }
-                    }
-                }
-                if (cands.length() == 0) {
-                    String hls = o.optString("hlsUrl", null);
-                    if (hls != null && !hls.isEmpty()) {
-                        JSONObject c = new JSONObject();
-                        c.put("url", hls.startsWith("http") ? hls : host + hls);
-                        c.put("kind", "hls");
-                        cands.put(c);
                     }
                 }
                 if (cands.length() > 0) {
