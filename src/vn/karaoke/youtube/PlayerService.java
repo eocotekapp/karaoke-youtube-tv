@@ -114,6 +114,11 @@ public class PlayerService extends Service {
         }
     };
 
+    /** v1.0.35: a new fallback attempt (proxy retry / next candidate)
+     * restarts the ~30 s stall clock so endCheck cannot skip the
+     * track mid-fallback. Called from MesuPlayer's fallback paths. */
+    public void resetStallPolls() { stallPolls = 0; }
+
     @Override public void onCreate() {
         super.onCreate();
         instance = this;

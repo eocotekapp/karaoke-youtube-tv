@@ -156,6 +156,19 @@ public class MesuPlayer {
     private volatile boolean hlsProxyRetried = false;
     private volatile boolean hlsPlayedOnce = false;
 
+    /** v1.0.35: runtime candidate fallback (the proven-live bug:
+     * prepareFromCandidates played the FIRST usable candidate and
+     * broke — a "Source error" on it killed the track even though
+     * the resolve returned more candidates, and the ~30 s stall
+     * watchdog then skipped the track). The resolved list + the
+     * index of the candidate currently attempted are kept for the
+     * track so onPlayerError can advance to the next one instead
+     * of giving up. Both reset in play() for every new track;
+     * trackCandidates is also cleared in stop() so a stale posted
+     * advance can never re-prepare after a stop. */
+    private volatile JSONArray trackCandidates = null;
+    private volatile int trackCandIndex = 0;
+
     public MesuPlayer(Context ctx) { this.ctx = ctx.getApplicationContext(); }
 
     /** v1.0.34: one-line cause detail for a PlaybackException — the
@@ -241,7 +254,7 @@ public class MesuPlayer {
                 StartupLog.log("Video: " + videoSize.width + "x" + videoSize.height);
             }
             @Override public void onPlayerError(PlaybackException error) {
-                // v1.0.31: direct-then-proxy HLS retry (mirrors the
+                // v1.0.31 (a): direct-then-proxy HLS retry (mirrors the
                 // original stage's [u, proxyUrl(u)] candidates). If the
                 // current track is a direct-HLS attempt that errored
                 // BEFORE ever reaching READY/playing, the load itself
@@ -250,15 +263,36 @@ public class MesuPlayer {
                 // track is still current (retryHlsViaProxy compares u
                 // against hlsDirectUrl, which play() clears for a new
                 // track). No PLAY-ERR upload yet — the track is not
-                // dead until the proxy attempt also fails. A mid-play
-                // error (hlsPlayedOnce) or an already-retried track
-                // goes straight to the normal PLAY-ERR path below.
+                // dead until the proxy attempt also fails.
+                // v1.0.35 (b): if the proxy retry was already used (or
+                // the failed candidate was not direct-HLS) and more
+                // candidates remain, advance to the next one instead
+                // of giving up — the resolve usually returns
+                // [hls (visionos), hls (invidious), progressive
+                // itag18], so a dead HLS manifest falls through to
+                // 360p instead of killing the track. The advance is
+                // posted to the main looper with the same staleness
+                // guard (advanceToNextCandidate re-checks id + list).
+                // (c) only when the list is exhausted, or the error
+                // came mid-play (hlsPlayedOnce — a playback problem,
+                // not a source-load problem, so it must NOT restart
+                // the track), does the normal PLAY-ERR path run.
                 if (hlsDirectUrl != null && !hlsProxyRetried && !hlsPlayedOnce) {
                     hlsProxyRetried = true;
                     final String u = hlsDirectUrl;
                     StartupLog.log("Phat " + currentId + ": hls truc tiep LOI, thu qua proxy: " + error.getMessage() + errDetail(error));
                     new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
                         @Override public void run() { retryHlsViaProxy(u); }
+                    });
+                    return;
+                }
+                if (!hlsPlayedOnce && trackCandidates != null && trackCandIndex + 1 < trackCandidates.length()) {
+                    final String errId = currentId;
+                    final JSONArray savedCands = trackCandidates;
+                    final int failedIndex = trackCandIndex;
+                    final String errLine = (error.getMessage() == null ? "playback error" : error.getMessage()) + errDetail(error);
+                    new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {
+                        @Override public void run() { advanceToNextCandidate(errId, savedCands, failedIndex, errLine); }
                     });
                     return;
                 }
@@ -286,6 +320,9 @@ public class MesuPlayer {
         hlsDirectUrl = null;
         hlsProxyRetried = false;
         hlsPlayedOnce = false;
+        // v1.0.35: fresh track — no candidate list until resolve returns.
+        trackCandidates = null;
+        trackCandIndex = 0;
         StartupLog.log("Phat: " + videoId + " '" + currentTitle + "'");
         new Thread(new Runnable() {
             @Override public void run() {
@@ -319,6 +356,9 @@ public class MesuPlayer {
      * PLAY-ERR path (hlsProxyRetried is already true). */
     private synchronized void retryHlsViaProxy(String u) {
         if (player == null || u == null || !u.equals(hlsDirectUrl)) return;
+        // v1.0.35: a new attempt restarts the ~30 s stall clock.
+        PlayerService svc = PlayerService.getInstance();
+        if (svc != null) svc.resetStallPolls();
         try {
             MediaItem item = MediaItem.fromUri(Uri.parse(u));
             MediaSource source = new HlsMediaSource.Factory(PROXY_HTTP_FACTORY).createMediaSource(item);
@@ -334,53 +374,121 @@ public class MesuPlayer {
         }
     }
 
+    /** v1.0.35: build the MediaSource for ONE candidate (index i of
+     * the stored trackCandidates). This is the old
+     * prepareFromCandidates loop body, extracted verbatim per kind:
+     * HLS kind (or .m3u8 URL) -> HlsMediaSource DIRECT first
+     * (Safari UA, no proxy) + sets hlsDirectUrl/hlsProxyRetried/
+     * hlsPlayedOnce for the attempt; otherwise -> /stream proxy URL
+     * for manifest/.m3u8/googlevideo URLs, Dash or Progressive.
+     * Returns null for an unusable entry (missing/empty URL) and
+     * touches no HLS state in that case. Called on the main thread. */
+    private MediaSource buildSourceForCandidate(int i) throws Exception {
+        if (trackCandidates == null || i < 0 || i >= trackCandidates.length()) return null;
+        JSONObject c = trackCandidates.optJSONObject(i);
+        if (c == null) return null;
+        String url = c.optString("url");
+        String kind = c.optString("kind");
+        if (url == null || url.isEmpty()) return null;
+        // Fresh attempt: no direct-HLS proxy retry used yet, no frame
+        // played yet. The HLS branch below sets hlsDirectUrl; a
+        // non-HLS candidate must clear it so the old manifest URL
+        // can never trigger a proxy retry for the wrong source.
+        hlsDirectUrl = null;
+        hlsProxyRetried = false;
+        hlsPlayedOnce = false;
+        if ("hls".equals(kind) || url.contains(".m3u8")) {
+            // v1.0.31: HLS plays DIRECT first (original Gathin
+            // behaviour — Safari UA, no proxy). The item URI
+            // stays RAW: the proxy factory rewrites it at open
+            // time only if the one-shot retry fires (see
+            // onPlayerError + retryHlsViaProxy). If the direct
+            // load errors before first frame, the retry rebuilds
+            // the same source with PROXY_HTTP_FACTORY.
+            hlsDirectUrl = url;
+            MediaItem item = MediaItem.fromUri(Uri.parse(url));
+            MediaSource source = new HlsMediaSource.Factory(DIRECT_SAFARI_FACTORY).createMediaSource(item);
+            StartupLog.log("Phat " + currentId + ": hls truc tiep");
+            return source;
+        }
+        // Route through the local /stream proxy when the URL is a manifest
+        // or when direct playback is blocked (CORS/403 on googlevideo).
+        HttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                .setUserAgent(YoutubeApi.UA)
+                .setAllowCrossProtocolRedirects(true);
+        String playUrl = url;
+        if (url.contains("manifest") || url.contains(".m3u8") || url.contains("googlevideo.com")) {
+            playUrl = "http://127.0.0.1:8792/stream?u=" +
+                    java.net.URLEncoder.encode(url, "UTF-8");
+        }
+        Uri uri = Uri.parse(playUrl);
+        MediaItem item = MediaItem.fromUri(uri);
+        if (url.contains(".mpd")) {
+            return new DashMediaSource.Factory(http).createMediaSource(item);
+        }
+        return new ProgressiveMediaSource.Factory(http).createMediaSource(item);
+    }
+
+    /** v1.0.35: runtime candidate fallback. Runs on the main thread
+     * (posted from onPlayerError). Drops a stale advance: the saved
+     * list must still be the current track's list AND the id must
+     * match — play() for a new track replaces the list, stop()
+     * clears it, release() nulls the player, so a late runnable
+     * can never re-prepare an old source over a new track. Scans
+     * forward from failedIndex+1 for the next usable candidate
+     * (skips empty-URL entries exactly like the first prepare);
+     * each new attempt resets the stall watchdog clock. Only when
+     * the list is exhausted does it take the PLAY-ERR path. */
+    private synchronized void advanceToNextCandidate(String errId, JSONArray savedCands, int failedIndex, String errLine) {
+        if (player == null || savedCands == null || savedCands != trackCandidates
+                || errId == null || !errId.equals(currentId)) return;
+        try {
+            MediaSource source = null;
+            int nextIndex = -1;
+            for (int i = failedIndex + 1; i < savedCands.length(); i++) {
+                source = buildSourceForCandidate(i);
+                if (source != null) { nextIndex = i; break; }
+            }
+            if (source == null) {
+                lastState = -1;
+                lastError = "het ung vien";
+                StartupLog.log("Phat LOI (" + currentId + " '" + currentTitle + "'): het ung vien, da thu " + (failedIndex + 1) + " ung vien");
+                LogUploader.send("PLAY-ERR");
+                return;
+            }
+            trackCandIndex = nextIndex;
+            // v1.0.35: a new attempt restarts the ~30 s stall clock.
+            PlayerService svc = PlayerService.getInstance();
+            if (svc != null) svc.resetStallPolls();
+            JSONObject c = savedCands.optJSONObject(nextIndex);
+            String kind = c == null ? "?" : c.optString("kind", "?");
+            StartupLog.log("Phat " + currentId + ": ung vien " + failedIndex + " LOI (" + errLine + "), thu ung vien " + nextIndex + " (" + kind + ")");
+            player.setMediaSource(source);
+            player.prepare();
+            player.setPlayWhenReady(true);
+            StartupLog.log("Phat " + currentId + ": da chuan bi xong, dang phat");
+        } catch (Exception e) {
+            lastState = -1;
+            lastError = e.getMessage() == null ? "prepare failed" : e.getMessage();
+            StartupLog.log("Phat " + currentId + " LOI prepare (ung vien " + (failedIndex + 1) + "): " + e);
+            LogUploader.send("PLAY-ERR");
+        }
+    }
+
     private synchronized void prepareFromCandidates(JSONObject r, JSONArray cands) {
         if (player == null) return;
         // v1.0.31: a new prepare starts with no direct-HLS attempt in
-        // flight; the HLS branch below sets hlsDirectUrl when it runs.
+        // flight; the HLS branch in buildSourceForCandidate sets
+        // hlsDirectUrl when it runs.
         hlsDirectUrl = null;
+        // v1.0.35: keep the list for the runtime fallback.
+        trackCandidates = cands;
+        trackCandIndex = 0;
         try {
-            HttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                    .setUserAgent(YoutubeApi.UA)
-                    .setAllowCrossProtocolRedirects(true);
             MediaSource source = null;
             for (int i = 0; i < cands.length(); i++) {
-                JSONObject c = cands.optJSONObject(i);
-                if (c == null) continue;
-                String url = c.optString("url");
-                String kind = c.optString("kind");
-                if (url == null || url.isEmpty()) continue;
-                if ("hls".equals(kind) || url.contains(".m3u8")) {
-                    // v1.0.31: HLS plays DIRECT first (original Gathin
-                    // behaviour — Safari UA, no proxy). The item URI
-                    // stays RAW: the proxy factory rewrites it at open
-                    // time only if the one-shot retry fires (see
-                    // onPlayerError + retryHlsViaProxy). If the direct
-                    // load errors before first frame, the retry rebuilds
-                    // the same source with PROXY_HTTP_FACTORY.
-                    hlsDirectUrl = url;
-                    hlsProxyRetried = false;
-                    hlsPlayedOnce = false;
-                    MediaItem item = MediaItem.fromUri(Uri.parse(url));
-                    source = new HlsMediaSource.Factory(DIRECT_SAFARI_FACTORY).createMediaSource(item);
-                    StartupLog.log("Phat " + currentId + ": hls truc tiep");
-                } else {
-                    // Route through the local /stream proxy when the URL is a manifest
-                    // or when direct playback is blocked (CORS/403 on googlevideo).
-                    String playUrl = url;
-                    if (url.contains("manifest") || url.contains(".m3u8") || url.contains("googlevideo.com")) {
-                        playUrl = "http://127.0.0.1:8792/stream?u=" +
-                                java.net.URLEncoder.encode(url, "UTF-8");
-                    }
-                    Uri uri = Uri.parse(playUrl);
-                    MediaItem item = MediaItem.fromUri(uri);
-                    if (url.contains(".mpd")) {
-                        source = new DashMediaSource.Factory(http).createMediaSource(item);
-                    } else {
-                        source = new ProgressiveMediaSource.Factory(http).createMediaSource(item);
-                    }
-                }
-                break; // first usable candidate wins; stage watchdog advances on stall
+                source = buildSourceForCandidate(i);
+                if (source != null) { trackCandIndex = i; break; }
             }
             if (source == null) { lastState = -1; lastError = "no usable candidate"; StartupLog.log("Phat " + currentId + " LOI: no usable candidate"); LogUploader.send("PLAY-ERR"); return; }
             player.setMediaSource(source);
@@ -400,6 +508,7 @@ public class MesuPlayer {
     public synchronized void stop() {
         if (player != null) { player.stop(); player.clearMediaItems(); }
         hlsDirectUrl = null; // v1.0.31: a stopped track has no retry pending
+        trackCandidates = null; // v1.0.35: a stopped track has no fallback pending
         lastState = -1;
     }
     public synchronized void setVolume(float v) {
