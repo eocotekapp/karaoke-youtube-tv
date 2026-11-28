@@ -40,6 +40,47 @@ public class MesuPlayer {
      * panel's slider reads s.volume on every refresh). */
     private volatile float lastVolume = 1.0f;
 
+    /** v1.0.32: position / duration / video-size, polled on the MAIN
+     * thread and cached here. WHY: getState() is called from
+     * RemoteServer's HTTP pool thread, and ExoPlayer 2.19.1 verifies
+     * the application thread in getCurrentPosition(), getDuration()
+     * and getVideoSize() — proven by javap on the exact
+     * exoplayer-core-2.19.1.aar in libs/ (all three call
+     * verifyApplicationThread first). Off-thread they throw
+     * IllegalStateException, which getState()'s inner try/catches
+     * swallowed — so /api/state always reported pos=0, dur=0, w=0,
+     * h=0 while st=1 (listener-maintained) was correct, and the
+     * panel's progress bar sat at 0:00 forever. Same thread check
+     * that broke pause()/stop() from the pool thread in v1.0.26.
+     * A 500 ms main-thread poller keeps these fields fresh (at most
+     * 500 ms stale — the panel polls every 2.5 s); getState() only
+     * reads the cache and never touches ExoPlayer off-thread. */
+    private volatile long lastPosMs = 0;
+    private volatile long lastDurMs = 0;
+    private volatile int lastVideoW = 0;
+    private volatile int lastVideoH = 0;
+    private android.os.Handler posHandler;
+    private final Runnable posPoll = new Runnable() {
+        @Override public void run() {
+            try {
+                if (player != null) {
+                    try { lastPosMs = player.getCurrentPosition(); } catch (Exception ignored) { }
+                    try {
+                        long d = player.getDuration();
+                        lastDurMs = (d == C.TIME_UNSET) ? 0 : d;
+                    } catch (Exception ignored) { }
+                    try {
+                        if (player.getVideoSize() != null) {
+                            lastVideoW = player.getVideoSize().width;
+                            lastVideoH = player.getVideoSize().height;
+                        }
+                    } catch (Exception ignored) { }
+                }
+            } catch (Exception ignored) { }
+            if (player != null && posHandler != null) posHandler.postDelayed(this, 500);
+        }
+    };
+
     /** v1.0.30: HLS loads — master manifest, variant playlists, segments
      * — must ALL go through the local /stream proxy (the proven path:
      * RemoteServer.proxyStream forwards Range and streams bytes).
@@ -136,6 +177,10 @@ public class MesuPlayer {
                 .build();
         player.setVolume(1.0f);
         if (surface != null) player.setVideoSurface(surface);
+        // v1.0.32: start the main-thread position poller (see lastPosMs).
+        if (posHandler == null) posHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+        posHandler.removeCallbacks(posPoll);
+        posHandler.post(posPoll);
         player.addListener(new Player.Listener() {
             @Override public void onPlaybackStateChanged(int state) {
                 if (state == Player.STATE_BUFFERING) lastState = 3;
@@ -148,6 +193,7 @@ public class MesuPlayer {
                 lastState = isPlaying ? 1 : (player != null && player.getPlaybackState() == Player.STATE_READY ? 2 : lastState);
             }
             @Override public void onVideoSizeChanged(VideoSize videoSize) {
+                lastVideoW = videoSize.width; lastVideoH = videoSize.height;
                 StartupLog.log("Video: " + videoSize.width + "x" + videoSize.height);
             }
             @Override public void onPlayerError(PlaybackException error) {
@@ -191,6 +237,7 @@ public class MesuPlayer {
         currentTitle = title == null ? "" : title;
         lastState = 3;
         lastError = "";
+        lastPosMs = 0; lastDurMs = 0; // v1.0.32: fresh track — no stale position
         // v1.0.31: fresh track — reset the direct-then-proxy HLS state.
         hlsDirectUrl = null;
         hlsProxyRetried = false;
@@ -319,6 +366,7 @@ public class MesuPlayer {
     public int getVolumePercent() { return Math.round(lastVolume * 100f); }
     public synchronized void seekTo(long ms) { if (player != null) player.seekTo(ms); }
     public synchronized void release() {
+        if (posHandler != null) posHandler.removeCallbacks(posPoll); // v1.0.32
         if (player != null) { player.release(); player = null; }
     }
 
@@ -327,23 +375,19 @@ public class MesuPlayer {
      * IllegalStateException from getPlaybackState()/isPlaying() when called
      * off the application thread — and RemoteServer answers /api/state from
      * a pool thread, so the live calls killed the whole state reply ({}).
-     * The listener-maintained lastState is the state source now. */
+     * The listener-maintained lastState is the state source now.
+     * v1.0.32: position/duration/video-size come from the main-thread
+     * poller cache (lastPosMs/lastDurMs/lastVideoW/lastVideoH) for the
+     * same reason — the live getters also verify the application
+     * thread, so calling them here always threw and left pos/dur/w/h
+     * at 0 (panel progress stuck at 0:00). This method now never
+     * touches ExoPlayer at all. */
     public synchronized String getState() {
         try {
             if (player == null) return lastState + ",0,0,0,0,";
-            int w = 0, h = 0;
-            try {
-                if (player.getVideoSize() != null) {
-                    w = player.getVideoSize().width;
-                    h = player.getVideoSize().height;
-                }
-            } catch (Exception ignored) { }
-            long pos = 0, dur = 0;
-            try { pos = player.getCurrentPosition(); dur = player.getDuration(); } catch (Exception ignored) { }
-            if (dur == C.TIME_UNSET) dur = 0;
             int st = lastState;
             String f = (currentId == null ? "" : currentId) + "|" + (currentTitle == null ? "" : currentTitle);
-            return st + "," + pos + "," + dur + "," + w + "," + h + "," + f;
+            return st + "," + lastPosMs + "," + lastDurMs + "," + lastVideoW + "," + lastVideoH + "," + f;
         } catch (Throwable t) {
             return lastState + ",0,0,0,0,";
         }
