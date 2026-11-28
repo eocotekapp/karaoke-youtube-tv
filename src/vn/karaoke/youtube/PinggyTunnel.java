@@ -24,6 +24,12 @@ import java.util.regex.Pattern;
  * class auto-reconnects (scheduled re-dial at ~55 min, plus reconnect on drop)
  * and always reports the CURRENT public URL to listeners.
  *
+ * v1.0.39: Pinggy Pro — with a token stored in SharedPreferences the
+ * tunnel connects as &lt;token&gt;@pro.pinggy.io; the dashboard assigns a
+ * persistent subdomain to the token, so the URL survives restarts
+ * (and a custom domain can CNAME to it). The token is NEVER logged,
+ * NEVER hard-coded, and NEVER leaves the box.
+ *
  * How it works: SSH to a.pinggy.io / free.pinggy.io port 443, request remote
  * forwarding -R0:localhost:8792, read the printed https://<name>.pinggy.link
  * URL from the shell channel output. No account/token needed for the free tier.
@@ -42,7 +48,7 @@ public class PinggyTunnel {
     // nothing, so the tunnel sat in "waiting-url" forever and no QR ever showed.
     // The dashboard link https://dashboard.pinggy.io must NOT match.)
     private static final Pattern URL_RE = Pattern.compile(
-            "https://[a-z0-9.-]+\\.(pinggy-free\\.link|free\\.pinggy\\.net|pinggy\\.link)");
+            "https://[a-z0-9.-]+\\.(a\\.pinggy\\.link|pinggy-free\\.link|free\\.pinggy\\.net|pinggy\\.link)");
     private static final long RECONNECT_BEFORE_MS = 55L * 60 * 1000; // free tier dies ~60 min
     private static final long RETRY_BASE_MS = 10 * 1000;
 
@@ -79,6 +85,28 @@ public class PinggyTunnel {
         ctx.getSharedPreferences("karaoke_pinggy", Context.MODE_PRIVATE)
                 .edit().putString("authUser", user == null ? "" : user)
                 .putString("authPass", pass == null ? "" : pass).apply();
+    }
+    /** v1.0.39: Pinggy Pro token — stored in SharedPreferences
+     * (private mode) ONLY, entered at runtime on the box. It is NEVER
+     * hard-coded, NEVER logged, and NEVER sent to the panel or the
+     * log uploader. Empty = free tier. */
+    public boolean hasProToken() {
+        return !ctx.getSharedPreferences("karaoke_pinggy", Context.MODE_PRIVATE)
+                .getString("proToken", "").isEmpty();
+    }
+    private String getProToken() {
+        return ctx.getSharedPreferences("karaoke_pinggy", Context.MODE_PRIVATE)
+                .getString("proToken", "");
+    }
+    /** Store (or clear, when empty) the Pro token and restart the
+     * tunnel so the new tier takes effect immediately. */
+    public void setProToken(String token) {
+        String t = token == null ? "" : token.trim();
+        ctx.getSharedPreferences("karaoke_pinggy", Context.MODE_PRIVATE)
+                .edit().putString("proToken", t).apply();
+        StartupLog.log("Pinggy Pro token " + (t.isEmpty() ? "da xoa" : "da luu"));
+        stop();
+        start();
     }
     public String getPublicUrl() { return publicUrl; }
     public String getState() { return state; }
@@ -142,10 +170,19 @@ public class PinggyTunnel {
 
     private void runOneSession() throws Exception {
         SharedPreferences p = ctx.getSharedPreferences("karaoke_pinggy", Context.MODE_PRIVATE);
-        String host = p.getString("host", "free.pinggy.io");
+        // v1.0.39: Pro — same JSch path, authenticated: the token is the
+        // SSH username and the host is pro.pinggy.io; the persistent
+        // subdomain is assigned to the token in the Pinggy dashboard,
+        // not by any flag here. The token is NEVER logged.
+        boolean pro = hasProToken();
+        String host = pro ? "pro.pinggy.io" : p.getString("host", "free.pinggy.io");
         String user = "free";
-        String au = getAuthUser(), ap = getAuthPass();
-        if (!au.isEmpty()) user = "b:" + au + ":" + ap; // Pinggy basic-auth flag in username
+        if (pro) user = getProToken();
+        else {
+            String au = getAuthUser(), ap = getAuthPass();
+            if (!au.isEmpty()) user = "b:" + au + ":" + ap; // Pinggy basic-auth flag in username
+        }
+        StartupLog.log("Pinggy: " + (pro ? "Pro" : "free"));
         JSch jsch = new JSch();
         Session session = jsch.getSession(user, host, 443);
         session.setConfig("StrictHostKeyChecking", "no");
@@ -161,7 +198,10 @@ public class PinggyTunnel {
             BufferedReader in = new BufferedReader(new InputStreamReader(ch.getInputStream(), "UTF-8"));
             ch.connect(10000);
             setState("waiting-url");
-            long deadline = System.currentTimeMillis() + RECONNECT_BEFORE_MS;
+            // Pro tunnels have no 60-min timeout, so the scheduled
+            // re-dial is 24 h; free tier keeps the 55-min re-dial.
+            long sessionStart = System.currentTimeMillis();
+            long deadline = sessionStart + (pro ? 24L * 60 * 60 * 1000 : RECONNECT_BEFORE_MS);
             String line;
             boolean gotUrl = false;
             while (wantRun && System.currentTimeMillis() < deadline && !Thread.currentThread().isInterrupted()) {
@@ -182,7 +222,7 @@ public class PinggyTunnel {
                 } else {
                     // keep the session alive; check deadline every 500 ms
                     try { Thread.sleep(500); } catch (InterruptedException ie) { throw ie; }
-                    if (!gotUrl && System.currentTimeMillis() > deadline - RECONNECT_BEFORE_MS + 30000) {
+                    if (!gotUrl && System.currentTimeMillis() > sessionStart + 30000) {
                         // no URL after 30 s: give up this session, retry
                         break;
                     }
