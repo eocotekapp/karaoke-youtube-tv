@@ -115,6 +115,12 @@ public class QrOverlayService extends Service {
     private int screenW, screenH;
     private Set<String> launcherPkgs = new HashSet<String>();
 
+    // v1.0.24: static instance so PlayerService can bring the QR back on
+    // top after adding the fullscreen video overlay (same-type windows
+    // stack by add order; the video would otherwise cover the QR).
+    private static QrOverlayService instance;
+    public static QrOverlayService getInstance() { return instance; }
+
     public static boolean isEnabled(Context ctx) {
         return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getBoolean("overlay_enabled", true);
@@ -151,6 +157,7 @@ public class QrOverlayService extends Service {
 
     @Override public void onCreate() {
         super.onCreate();
+        instance = this;
         // MUST call startForeground() FIRST, before anything else.
         // A service started with startForegroundService() has ~5 s to call
         // startForeground() — even when it is about to stop itself. The old
@@ -265,6 +272,28 @@ public class QrOverlayService extends Service {
         handler.post(tick);
     }
 
+    /** v1.0.24: re-add the QR card so it sits ABOVE the fullscreen video
+     * overlay (same TYPE_APPLICATION_OVERLAY windows stack in add order;
+     * the video window is added later, so without this the video would
+     * cover the QR). Called by PlayerService right after adding the video
+     * window. Runs on this service's main handler; no-op when the card is
+     * not added yet. */
+    public void bringToFront() {
+        if (handler == null) return;
+        handler.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (!added || card == null || wm == null) return;
+                    wm.removeView(card);
+                    wm.addView(card, params);
+                    StartupLog.log("QR noi: dua len tren video overlay");
+                } catch (Throwable t) {
+                    StartupLog.log("QR noi: dua len tren LOI: " + t);
+                }
+            }
+        });
+    }
+
     /** Low-priority foreground notification so the overlay survives (API 26+). */
     private void startForegroundQuiet() {
         try {
@@ -342,9 +371,16 @@ public class QrOverlayService extends Service {
 
     /** v1.0.22: shrink only when the video is actually visible — the
      * activity is in the foreground AND the player state is playing
-     * (st==1 in "st,pos,dur,w,h,f"). Null-safe, never throws. */
+     * (st==1 in "st,pos,dur,w,h,f"). Null-safe, never throws.
+     * v1.0.24: also shrink while the video plays on the service-owned
+     * overlay over the home screen / other apps — the user's v1.0.22 ask
+     * was "QR smaller while a video is playing", the video can now play
+     * in the background too, and a 288dp home-screen QR would cover most
+     * of it. Sizes unchanged (64dp / 12sp). */
     private boolean isPlayingInForeground() {
         try {
+            PlayerService svc0 = PlayerService.getInstance();
+            if (svc0 != null && svc0.isVideoOverlayShown()) return true;
             if (!KaraokeActivity.isForeground) return false;
             PlayerService svc = PlayerService.getInstance();
             if (svc == null || svc.getPlayer() == null) return false;
@@ -467,6 +503,7 @@ public class QrOverlayService extends Service {
     }
 
     @Override public void onDestroy() {
+        instance = null; // v1.0.24
         if (handler != null) handler.removeCallbacks(tick);
         if (added && card != null) {
             try { wm.removeView(card); } catch (Exception ignored) { }

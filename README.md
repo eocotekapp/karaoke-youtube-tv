@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.23-pinggy (versionCode 24) · **APK:** `KaraokeYouTube.apk` — **2,769,370 bytes**
+**Version:** 1.0.24-pinggy (versionCode 25) · **APK:** `KaraokeYouTube.apk` — **2,769,371 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -161,6 +161,46 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   user opens with one remote OK press (on many TV firmwares it opens
   straight away). Every step is logged ("Mo app: ..." lines) and the
   fallback can never break playback — audio keeps playing no matter what.
+- v1.0.24 (overlay video surface for exit-play + PLAY-BG log upload +
+  usage-access prompt, 2026-11-28): THREE fixes. (1) ROOT CAUSE of the
+  exit-play audio-only bug, found by reading `RemoteServer.playItem()`:
+  it called `player.play()` DIRECTLY, bypassing `PlayerService.playNow()`
+  entirely — so the v1.0.21 bring-to-front AND the v1.0.23 full-screen
+  intent never fired for ANY panel play (the user's exact test). The
+  v1.0.23 audit's "/api/playnow -> playItem -> playNow" trace was wrong.
+  playItem now routes through `playNow()`, the true single choke point
+  for every play start (panel, paste, next/prev, queue advance, stall
+  watchdog, D-pad). (2) OVERLAY VIDEO: `playNow()` while the activity is
+  not in the foreground now also attaches the player to a service-owned
+  fullscreen `WindowManager` overlay (`TYPE_APPLICATION_OVERLAY`,
+  `FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCH_MODAL`, MATCH_PARENT) holding a
+  `SurfaceView` — the video renders over the home screen / other apps,
+  a mechanism background-activity-start restrictions cannot block (the
+  app holds SYSTEM_ALERT_WINDOW and already runs an overlay service).
+  The activity surface takes over on `onResume`/`attachSurface()` (the
+  overlay window is then removed); exiting while playing re-attaches the
+  overlay in `onPause()`; `endCheck` (3 s poll) shows it when playing in
+  the background (covers resume-after-pause, which never goes through
+  playNow) and removes it on pause/stop/end/error so no black overlay
+  sits on screen. All switching goes through the one `ensureSurface()`
+  path; the overlay's `surfaceDestroyed` never clears a live overlay
+  surface, and the activity's `surfaceDestroyed` never clears one
+  either. The floating QR is re-added on top of the video window
+  (`QrOverlayService.bringToFront()`) and shrinks to 64dp while the
+  overlay video is showing. The v1.0.23 full-screen intent stays as a
+  secondary path. (3) PLAY-BG: `playNow()` while not in the foreground
+  now triggers a log upload (new tag `PLAY-BG`, delayed 2 s so the
+  "Video overlay:" / "Mo app:" lines land first) — a normal panel play
+  used to fire NO upload tag, so the exit-play evidence never left the
+  box. Only in the background case, so the token's 50-request cap is not
+  burned by normal playback. (4) HOME 3x: the home-screen 3x rule could
+  NEVER work — usage access was never requested anywhere, and the
+  `ActivityManager` fallback only returns this app's own processes on
+  API 26+, so the launcher was never detected (the QR stayed 96dp on the
+  home screen, user's TV photo 2026-11-28 09:18). One-time
+  usage-access prompt added (`maybePromptUsageAccess()`, modelled on the
+  overlay prompt; flag `usage_prompt_asked`). Sizes unchanged
+  (96/64/288dp).
 - v1.0.22 (QR smaller while a video is playing, user asked 2026-11-28
   08:33 "Tôi cần QR bé hơn khi đang trong trình phát video"): while a video
   is playing (player state st==1 in "st,pos,dur,w,h,f") both QRs shrink to

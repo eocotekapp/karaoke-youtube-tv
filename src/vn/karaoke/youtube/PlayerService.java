@@ -7,11 +7,16 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.graphics.PixelFormat;
 import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.ViewGroup;
+import android.view.WindowManager;
 import android.widget.Toast;
 
 /**
@@ -67,7 +72,10 @@ public class PlayerService extends Service {
                         StartupLog.log("Bai vua het, chuyen bai ke");
                         LibraryState.Item n = library.next();
                         if (n != null) playNow(n);
-                        else player.stop();
+                        // v1.0.24: queue over -> stop + drop the overlay
+                        // window (a black fullscreen overlay must never
+                        // sit over the home screen when nothing plays).
+                        else { player.stop(); if (videoOverlayAdded) hideVideoOverlay(); }
                     } else if ((code == 3 || code == -1) && library != null && library.current() != null) {
                         stallPolls++;
                         if (stallPolls >= 10) { // ~30 s stuck
@@ -79,6 +87,19 @@ public class PlayerService extends Service {
                         }
                     } else {
                         stallPolls = 0;
+                    }
+                    // v1.0.24: overlay video follows the player state while
+                    // the activity is in the background. Playing (1) with
+                    // no overlay yet -> show it (covers resume-after-pause
+                    // from the panel, which never goes through playNow).
+                    // Paused (2) / idle-error (-1) -> remove it so a black
+                    // fullscreen overlay never sits over the home screen
+                    // when nothing is playing. Buffering (3) leaves it
+                    // alone either way. Ended (0) is handled above.
+                    if (code == 1 && !KaraokeActivity.isForeground && !videoOverlayAdded) {
+                        showVideoOverlay();
+                    } else if ((code == 2 || code == -1) && videoOverlayAdded) {
+                        hideVideoOverlay();
                     }
                 }
             } catch (Exception ignored) { }
@@ -178,6 +199,167 @@ public class PlayerService extends Service {
         updateNotification();
     }
 
+    // v1.0.24: overlay video window (service-owned SurfaceView over ANY
+    // screen). See showVideoOverlay() — the mechanism that cannot be
+    // blocked by background-activity-start restrictions.
+    private WindowManager videoOverlayWm;
+    private SurfaceView videoOverlayView;
+    private boolean videoOverlayAdded = false;
+    private boolean videoOverlaySurfaceLive = false;
+
+    // v1.0.24: PLAY-BG upload — delayed 2 s so the "Video overlay:" and
+    // "Mo app:" lines land in the ring buffer before it is sent. One
+    // Runnable; re-posting replaces the pending one (a second background
+    // play within 2 s still uploads once).
+    private final Runnable playBgUpload = new Runnable() {
+        @Override public void run() {
+            try { LogUploader.send("PLAY-BG"); }
+            catch (Throwable t) { StartupLog.log("PLAY-BG LOI: " + t); }
+        }
+    };
+
+    /** v1.0.24: is the overlay video WINDOW on screen (video visible over
+     * home screen / other apps, or about to be)? Used by the QR shrink
+     * condition in QrOverlayService. */
+    public boolean isVideoOverlayShown() { return videoOverlayAdded; }
+
+    /** v1.0.24: is the overlay SURFACE currently attached to the player?
+     * Used by KaraokeActivity.surfaceDestroyed so it never clears a live
+     * overlay surface when the activity surface dies after the overlay
+     * already took over. */
+    public boolean isVideoOverlaySurfaceLive() { return videoOverlaySurfaceLive; }
+
+    /**
+     * v1.0.24: show the video on a service-owned fullscreen overlay window.
+     * WHY: v1.0.21/23 tried to bring KaraokeActivity to the front (plain
+     * startActivity, then a full-screen intent). Both failed on the FPT Play
+     * 650 — proven by the user's TV photo 2026-11-28 09:18 (home screen,
+     * audio only, no notification visible). The app already holds
+     * SYSTEM_ALERT_WINDOW and already runs an overlay service, so a
+     * WindowManager overlay is the mechanism that cannot be blocked: the
+     * SurfaceView lives in the SERVICE, not in the activity, and renders
+     * over whatever is on screen. Idempotent; all WindowManager work runs
+     * on the main handler (playNow is called from pool threads too).
+     * The activity surface takes over when the activity returns (see
+     * KaraokeActivity.attachSurface -> hideVideoOverlay), and endCheck
+     * removes the window when playback pauses/stops/ends.
+     */
+    public void showVideoOverlay() {
+        handler.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (videoOverlayAdded) return;
+                    // The activity may have come forward between the post
+                    // and this run — then its surface owns the video.
+                    if (KaraokeActivity.isForeground) return;
+                    if (videoOverlayWm == null) {
+                        videoOverlayWm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                    }
+                    videoOverlayView = new SurfaceView(PlayerService.this);
+                    videoOverlayView.setLayoutParams(new ViewGroup.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT));
+                    videoOverlayView.getHolder().addCallback(new SurfaceHolder.Callback() {
+                        @Override public void surfaceCreated(SurfaceHolder h) {
+                            try {
+                                // The activity may have returned while the
+                                // window was being added — never steal its
+                                // surface; the activity owns the video then.
+                                if (KaraokeActivity.isForeground) {
+                                    hideVideoOverlay();
+                                    return;
+                                }
+                                if (player != null && h.getSurface() != null) {
+                                    player.ensureSurface(h.getSurface());
+                                    videoOverlaySurfaceLive = true;
+                                    StartupLog.log("Video overlay: hien");
+                                }
+                            } catch (Throwable t) {
+                                StartupLog.log("Video overlay: gan surface LOI: " + t);
+                            }
+                        }
+                        @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) {
+                            try {
+                                if (!KaraokeActivity.isForeground && player != null
+                                        && h.getSurface() != null) {
+                                    player.ensureSurface(h.getSurface());
+                                    videoOverlaySurfaceLive = true;
+                                }
+                            } catch (Throwable t) {
+                                StartupLog.log("Video overlay: doi surface LOI: " + t);
+                            }
+                        }
+                        @Override public void surfaceDestroyed(SurfaceHolder h) {
+                            // Only clear when the overlay surface was the
+                            // live one. During an intentional hide,
+                            // hideVideoOverlay() clears the flag FIRST, so
+                            // this never clobbers the activity surface that
+                            // just took over. On an unexpected loss (screen
+                            // off etc.) the flag is still set: clear so the
+                            // renderer never dies on a dead surface; the
+                            // surface is re-attached when it comes back.
+                            if (videoOverlaySurfaceLive) {
+                                videoOverlaySurfaceLive = false;
+                                try {
+                                    if (player != null) player.ensureSurface(null);
+                                } catch (Throwable ignored) { }
+                                StartupLog.log("Video overlay: mat surface");
+                            }
+                        }
+                    });
+                    int type = Build.VERSION.SDK_INT >= 26
+                            ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                            : WindowManager.LayoutParams.TYPE_PHONE;
+                    WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            type,
+                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                    | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                            PixelFormat.TRANSLUCENT);
+                    lp.gravity = android.view.Gravity.TOP | android.view.Gravity.START;
+                    lp.x = 0;
+                    lp.y = 0;
+                    videoOverlayWm.addView(videoOverlayView, lp);
+                    videoOverlayAdded = true;
+                    StartupLog.log("Video overlay: tao");
+                    // The QR must stay ABOVE the video (it is how the user
+                    // opens the panel): same-type windows stack by add
+                    // order, so re-add the QR card on top of the video.
+                    try {
+                        QrOverlayService q = QrOverlayService.getInstance();
+                        if (q != null) q.bringToFront();
+                    } catch (Throwable ignored) { }
+                } catch (Throwable t) {
+                    StartupLog.log("Video overlay: tao LOI: " + t);
+                }
+            }
+        });
+    }
+
+    /** v1.0.24: remove the overlay video window. Idempotent. The live flag
+     * is cleared FIRST so the surfaceDestroyed callback fired by removeView
+     * never clears the activity surface that just took over. */
+    public void hideVideoOverlay() {
+        handler.post(new Runnable() {
+            @Override public void run() {
+                try {
+                    if (!videoOverlayAdded) return;
+                    videoOverlaySurfaceLive = false;
+                    if (videoOverlayWm != null && videoOverlayView != null) {
+                        try { videoOverlayWm.removeView(videoOverlayView); }
+                        catch (Throwable ignored) { }
+                    }
+                    videoOverlayView = null;
+                    videoOverlayAdded = false;
+                    StartupLog.log("Video overlay: an");
+                } catch (Throwable t) {
+                    StartupLog.log("Video overlay: an LOI: " + t);
+                }
+            }
+        });
+    }
+
     // v1.0.23: delayed bring-to-front check (see playNow()). One reusable
     // Runnable; pendingFsTitle carries the track name for the notification.
     private String pendingFsTitle = "";
@@ -244,7 +426,37 @@ public class PlayerService extends Service {
         // keeps the startActivity attempt as the FIRST try and adds a
         // second, independent mechanism — a full-screen intent — that does
         // not depend on the background-activity-start exemption at all.
+        // v1.0.24 CORRECTION — the v1.0.23 audit above was WRONG on one
+        // point: /api/playnow does NOT go through playNow() at all.
+        // RemoteServer.playItem() called player.play() DIRECTLY, so every
+        // panel play bypassed this whole method — the v1.0.21 startActivity
+        // AND the v1.0.23 full-screen intent never fired for the user's
+        // exact test (exit app -> choose video in the panel -> audio
+        // only). That, not the SAW exemption, is the primary cause of the
+        // 2026-11-28 failures. playItem now routes through playNow()
+        // (RemoteServer.java), so this method is the true single choke
+        // point for every play start: panel, paste, next/prev, queue
+        // advance, stall watchdog, D-pad. The audit's step-1 finding
+        // (blocked background starts fail silently on API 30) still
+        // stands as a secondary cause — which is why the overlay video
+        // below is the primary mechanism now, not startActivity.
         if (!KaraokeActivity.isForeground) {
+            // v1.0.24 PRIMARY: service-owned overlay video surface — the
+            // video renders on a fullscreen WindowManager overlay over
+            // the home screen / other apps. Not blocked by
+            // background-activity-start restrictions (the app holds
+            // SYSTEM_ALERT_WINDOW and already runs an overlay service).
+            // Shown BEFORE player.play() so the surface exists when the
+            // first frame is decoded.
+            showVideoOverlay();
+            // v1.0.24: PLAY-BG upload — the old blindness was that a
+            // normal panel play fires no upload tag, so the "Mo app:"
+            // evidence never left the box. Delayed 2 s so the "Video
+            // overlay:" / "Mo app:" lines land in the ring first. Only
+            // in the background case (normal in-app playback uploads
+            // nothing) — the fresh token caps at 50 requests.
+            handler.removeCallbacks(playBgUpload);
+            handler.postDelayed(playBgUpload, 2000);
             try {
                 StartupLog.log("Mo app: startActivity dua Karaoke len truoc");
                 Intent ai = new Intent(this, KaraokeActivity.class);
@@ -363,6 +575,9 @@ public class PlayerService extends Service {
         handler.removeCallbacks(endCheck);
         handler.removeCallbacks(sleepCheck);
         handler.removeCallbacks(watchdog);
+        handler.removeCallbacks(playBgUpload);
+        handler.removeCallbacks(bringToFrontCheck);
+        hideVideoOverlay(); // best-effort: the window dies with the process anyway
         if (tunnel != null) tunnel.stop();
         if (server != null) server.stop();
         if (player != null) player.release();

@@ -124,9 +124,14 @@ public class KaraokeActivity extends Activity {
                 // kills the renderer on the next play (log 2026-11-28 07:06:
                 // even 640x360 failed after exit). surfaceCreated/onResume
                 // re-attach the fresh surface.
+                // v1.0.24: never clear a LIVE overlay surface — onPause
+                // already showed the service-owned overlay video, and its
+                // surface may have taken over before this callback fires;
+                // clearing here would black out the video that just moved
+                // to the overlay.
                 try {
                     PlayerService s = PlayerService.getInstance();
-                    if (s != null) s.getPlayer().ensureSurface(null);
+                    if (s != null && !s.isVideoOverlaySurfaceLive()) s.getPlayer().ensureSurface(null);
                 } catch (Throwable t) {
                     StartupLog.log(KaraokeActivity.this, "Surface huy LOI: " + t);
                 }
@@ -222,6 +227,7 @@ public class KaraokeActivity extends Activity {
 
         loadStageWhenReady();
         maybePromptOverlay(); // v1.0.14: one-time overlay-permission prompt
+        maybePromptUsageAccess(); // v1.0.24: one-time usage-access prompt (home 3x)
         stageHandler.post(qrPoll); // in-activity QR card refresh (2 s)
         // v1.0.5: the app now sends its startup log to Mesu by itself
         // (LogUploader, webhook.site) ~6 s after launch — no photo needed.
@@ -278,6 +284,44 @@ public class KaraokeActivity extends Activity {
                     .show();
         } catch (Throwable t) {
             StartupLog.log(this, "Overlay prompt LOI: " + t);
+        }
+    }
+
+    /**
+     * v1.0.24: ONE-TIME usage-access prompt. The floating QR is supposed to
+     * grow 3x (288dp) on the home screen, but home detection can NEVER work
+     * without this grant: UsageStatsManager returns nothing unless the user
+     * grants usage access in Settings, and the ActivityManager fallback
+     * (getRunningAppProcesses) only ever returns this app's OWN processes
+     * on API 26+, so the launcher is never detected — the QR stayed 96dp
+     * on the home screen (user's TV photo 2026-11-28 09:18). Nothing in the
+     * app ever asked for it before. Modelled on maybePromptOverlay():
+     * small native dialog, dismissible, asked once ever, opens the
+     * Settings screen where the user flips the switch for Karaoke.
+     */
+    private void maybePromptUsageAccess() {
+        try {
+            if (QrOverlayService.hasUsageAccess(this)) return; // already granted
+            SharedPreferences prefs = getSharedPreferences("karaoke_prefs", MODE_PRIVATE);
+            if (prefs.getBoolean("usage_prompt_asked", false)) return;
+            prefs.edit().putBoolean("usage_prompt_asked", true).apply();
+            new AlertDialog.Builder(this)
+                    .setTitle("QR to gấp 3 ở màn hình chính?")
+                    .setMessage("Cho phép Karaoke xem app nào đang mở, để mã QR tự to lên gấp 3 khi ở màn hình chính cho dễ quét.")
+                    .setPositiveButton("Cho phép", new DialogInterface.OnClickListener() {
+                        @Override public void onClick(DialogInterface d, int which) {
+                            try {
+                                startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS));
+                            } catch (Exception e) {
+                                StartupLog.log(KaraokeActivity.this, "Mo man hinh usage-access LOI: " + e);
+                            }
+                        }
+                    })
+                    .setNegativeButton("Để sau", null)
+                    .setCancelable(true)
+                    .show();
+        } catch (Throwable t) {
+            StartupLog.log(this, "Usage prompt LOI: " + t);
         }
     }
 
@@ -465,6 +509,11 @@ public class KaraokeActivity extends Activity {
             s.getPlayer().ensureSurface(surfaceView.getHolder().getSurface());
             surfaceRetryCount = 0;
             StartupLog.log(this, "Surface gan xong");
+            // v1.0.24: the activity surface owns the video now — drop the
+            // service-owned overlay window (hide is idempotent; the live
+            // flag is cleared first so its surfaceDestroyed never clears
+            // the surface that was just attached here).
+            s.hideVideoOverlay();
             return;
         }
         // Service may not exist yet when the surface is created (slow box):
@@ -500,6 +549,15 @@ public class KaraokeActivity extends Activity {
 
     @Override protected void onPause() {
         isForeground = false; // v1.0.21
+        // v1.0.24: exiting while a video is playing -> hand the picture to
+        // the service-owned overlay surface so it keeps showing over the
+        // home screen / other app (the activity surface dies right after
+        // this; surfaceDestroyed is guarded so it cannot clear the
+        // overlay surface that just took over).
+        try {
+            PlayerService s = PlayerService.getInstance();
+            if (s != null && isPlayingNow()) s.showVideoOverlay();
+        } catch (Throwable ignored) { }
         super.onPause();
     }
 

@@ -233,9 +233,22 @@ public class RemoteServer {
     private void playItem(LibraryState.Item it) {
         if (it == null) return;
         library.recordPlay(it);
-        // Resolve title if missing (best effort, async-safe: play uses id only)
+        // v1.0.24 ROOT CAUSE: this used to call player.play() DIRECTLY,
+        // bypassing PlayerService.playNow() entirely — so the v1.0.21
+        // bring-to-front AND the v1.0.23 full-screen intent never fired
+        // for ANY panel play (/api/playnow, /api/paste, next/prev, jump,
+        // playlist): exit app -> choose video -> audio only, every time,
+        // while the fixes sat unused in playNow(). playNow() is now the
+        // true single choke point for every play start (it calls
+        // player.play() itself + onStartedPlaying()). Direct play is kept
+        // only as a defensive fallback when the service reference is null
+        // (never in practice: PlayerService sets it before server.start()).
+        if (service != null) {
+            service.playNow(it);
+            return;
+        }
+        // Defensive fallback only (service is null): play directly.
         player.play(it.id, it.title == null ? "" : it.title);
-        if (service != null) service.onStartedPlaying();
     }
 
     private void route(String method, String path, Map<String, String> q,
