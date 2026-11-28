@@ -12,6 +12,7 @@ import com.google.android.exoplayer2.source.MediaSource;
 import com.google.android.exoplayer2.source.ProgressiveMediaSource;
 import com.google.android.exoplayer2.source.dash.DashMediaSource;
 import com.google.android.exoplayer2.source.hls.HlsMediaSource;
+import com.google.android.exoplayer2.trackselection.DefaultTrackSelector;
 import com.google.android.exoplayer2.upstream.DefaultHttpDataSource;
 import com.google.android.exoplayer2.upstream.HttpDataSource;
 import com.google.android.exoplayer2.video.VideoSize;
@@ -40,7 +41,15 @@ public class MesuPlayer {
         HttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
                 .setUserAgent(YoutubeApi.UA)
                 .setAllowCrossProtocolRedirects(true);
+        // v1.0.14: cap video at 1280x720 / 4.5 Mbps exactly like the original
+        // Gathin TrackSelector — the FPT Play 650 decoder advertises 1080p60
+        // support but dies on a 1080p60 segment (log 2026-11-28 07:06).
+        DefaultTrackSelector trackSelector = new DefaultTrackSelector(ctx);
+        trackSelector.setParameters(trackSelector.buildUponParameters()
+                .setMaxVideoSize(1280, 720)
+                .setMaxVideoBitrate(4500000));
         player = new ExoPlayer.Builder(ctx)
+                .setTrackSelector(trackSelector)
                 .setSeekBackIncrementMs(10000)
                 .setSeekForwardIncrementMs(10000)
                 .build();

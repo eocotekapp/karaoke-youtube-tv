@@ -1,6 +1,6 @@
 # Karaoke YouTube — standalone APK for Android TV Box
 
-**Version:** 1.0.13-pinggy (versionCode 14) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
+**Version:** 1.0.14-pinggy (versionCode 15) · **APK:** `KaraokeYouTube.apk` — **2,765,275 bytes**
 **Package:** `vn.karaoke.youtube` · **minSdk 21 / targetSdk 30** · **Signed** (new per-project keystore `keystore.jks`, alias `karaoke`)
 **Build:** `./build.sh` — manual aapt2 → javac (Java 8) → d8 → zipalign → apksigner, no Gradle.
 **Note:** `libs/` (binary jars/AARs) and `keystore.jks` are NOT in this repo — run `./fetch-libs.sh` first to download the libraries, and `build.sh` generates a fresh local keystore on first run; neither is ever committed.
@@ -134,6 +134,23 @@ No decompilation/repack of tvhome: clean rewrite from the behaviour spec in
   `stageHandler`, regenerates on URL change and logs "QR man hinh: hien link
   <url>". The floating `QrOverlayService` is untouched (still the QR over
   other apps / the home screen).
+- v1.0.14 (three fixes from real-device logs, FPT Play 650, 2026-11-28
+  07:06): (1) video capped at 1280x720 / 4.5 Mbps in the ExoPlayer
+  `DefaultTrackSelector`, exactly like the original Gathin — the box decoder
+  played 1280x720 then 1920x1080, then died on a 1080p60 segment
+  (avc1.4D402A, 5.5 Mbps, advertises support but chokes); our rewrite had no
+  cap. (2) `surfaceDestroyed()` now clears the player's video surface
+  (`ensureSurface(null)`, try/catch) — after the user exited the app,
+  playback failed again even on 640x360 because the player kept a dead
+  surface; `surfaceCreated`/`onResume` re-attach the fresh surface.
+  (3) ONE-TIME overlay-permission prompt on launch: a small dismissible
+  native dialog ("QR nổi trên màn hình?") shown only if the grant is missing
+  and never asked before (`karaoke_prefs` / `overlay_prompt_asked`); "Cho
+  phép" opens the system overlay-permission screen, "Để sau" dismisses —
+  either choice never shows it again (the phone panel's "Cấp quyền" button
+  stays as the manual path). `onResume()` also starts `QrOverlayService`
+  when enabled + permitted, so the floating QR appears right after the user
+  returns from granting.
 - v1.0.9: Pinggy's REAL free URL is `https://<random>.run.pinggy-free.link`
   (and `https://<random>.free.pinggy.net`) — the old regex only matched
   `*.pinggy.link`, so the tunnel sat in "waiting-url" forever and no QR ever

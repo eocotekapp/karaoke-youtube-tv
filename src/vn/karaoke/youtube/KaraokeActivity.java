@@ -1,11 +1,16 @@
 package vn.karaoke.youtube;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.graphics.Bitmap;
 import android.graphics.drawable.GradientDrawable;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -99,7 +104,19 @@ public class KaraokeActivity extends Activity {
         surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override public void surfaceCreated(SurfaceHolder h) { attachSurface(); }
             @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int ht) { attachSurface(); }
-            @Override public void surfaceDestroyed(SurfaceHolder h) { }
+            @Override public void surfaceDestroyed(SurfaceHolder h) {
+                // v1.0.14: the SurfaceView is gone when the user exits the app.
+                // Clear the player's video surface so a dead surface never
+                // kills the renderer on the next play (log 2026-11-28 07:06:
+                // even 640x360 failed after exit). surfaceCreated/onResume
+                // re-attach the fresh surface.
+                try {
+                    PlayerService s = PlayerService.getInstance();
+                    if (s != null) s.getPlayer().ensureSurface(null);
+                } catch (Throwable t) {
+                    StartupLog.log(KaraokeActivity.this, "Surface huy LOI: " + t);
+                }
+            }
         });
         root.addView(surfaceView);
 
@@ -190,6 +207,7 @@ public class KaraokeActivity extends Activity {
         setContentView(root);
 
         loadStageWhenReady();
+        maybePromptOverlay(); // v1.0.14: one-time overlay-permission prompt
         stageHandler.post(qrPoll); // in-activity QR card refresh (2 s)
         // v1.0.5: the app now sends its startup log to Mesu by itself
         // (LogUploader, webhook.site) ~6 s after launch — no photo needed.
@@ -197,6 +215,11 @@ public class KaraokeActivity extends Activity {
             @Override public void run() { LogUploader.send(KaraokeActivity.this, "STARTUP"); }
         }, 6000);
         // Floating QR overlay (starts with the service; hides itself if no permission/URL).
+        startQrOverlay();
+    }
+
+    /** Start the floating QR overlay when it is enabled and permitted. */
+    private void startQrOverlay() {
         // Only start it when overlay permission is granted (see PlayerService).
         if (QrOverlayService.isEnabled(this) && QrOverlayService.canShow(this)) {
             try {
@@ -204,6 +227,43 @@ public class KaraokeActivity extends Activity {
                 if (Build.VERSION.SDK_INT >= 26) startForegroundService(oi);
                 else startService(oi);
             } catch (Exception e) { CrashHandler.log(this, e); }
+        }
+    }
+
+    /**
+     * v1.0.14: ONE-TIME overlay-permission prompt on launch. The floating QR
+     * never started because the grant was never given and the user had to
+     * hunt for the button (log 2026-11-28 07:06). Small native dialog,
+     * dismissible, does NOT block the stage behind it. Asked once ever —
+     * either choice marks it asked; the phone panel's "Cấp quyền" button
+     * stays as the manual path.
+     */
+    private void maybePromptOverlay() {
+        try {
+            if (QrOverlayService.canShow(this)) return; // already granted
+            SharedPreferences prefs = getSharedPreferences("karaoke_prefs", MODE_PRIVATE);
+            if (prefs.getBoolean("overlay_prompt_asked", false)) return;
+            prefs.edit().putBoolean("overlay_prompt_asked", true).apply();
+            new AlertDialog.Builder(this)
+                    .setTitle("QR nổi trên màn hình?")
+                    .setMessage("Cho phép Karaoke vẽ QR lên trên các app khác và màn hình chính, để thoát app vẫn quét được.")
+                    .setPositiveButton("Cho phép", new DialogInterface.OnClickListener() {
+                        @Override public void onClick(DialogInterface d, int which) {
+                            try {
+                                // Same form as /api/overlay?action=grant in RemoteServer.
+                                Intent gi = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:" + getPackageName()));
+                                startActivity(gi);
+                            } catch (Exception e) {
+                                StartupLog.log(KaraokeActivity.this, "Mo man hinh cap quyen LOI: " + e);
+                            }
+                        }
+                    })
+                    .setNegativeButton("Để sau", null)
+                    .setCancelable(true)
+                    .show();
+        } catch (Throwable t) {
+            StartupLog.log(this, "Overlay prompt LOI: " + t);
         }
     }
 
@@ -368,6 +428,9 @@ public class KaraokeActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         attachSurface();
+        // v1.0.14: start the floating QR right after the user returns from
+        // granting the overlay permission (prompt in onCreate / panel button).
+        startQrOverlay();
         if (webView != null) webView.loadUrl("javascript:if(window.refresh)refresh()");
     }
 
